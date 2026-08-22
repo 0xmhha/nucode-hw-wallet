@@ -53,7 +53,7 @@ export class NuWalletProvider implements Eip1193Provider {
       case 'eth_accounts': {
         if (!this.wallet.isConnected) await this.wallet.connect();
         if (!this.account) {
-          this.account = await this.wallet.getAddress(this.path);
+          this.account = await this.wallet.getAddress('ethereum', this.path);
           this.emit('accountsChanged', [this.account]);
           this.emit('connect', { chainId: this.hexChainId });
         }
@@ -87,7 +87,7 @@ export class NuWalletProvider implements Eip1193Provider {
       case 'eth_sendTransaction': {
         const tx = await this.fillTransaction(p[0] ?? {});
         const unsigned = encodeLegacyUnsigned(tx, this.opts.chainId);
-        const sig = await this.wallet.signTransaction(this.path, unsigned, this.opts.chainId, this.cb());
+        const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.opts.chainId, this.cb());
         const rawTx = encodeLegacySigned(tx, sig.v, fromHex(sig.r), fromHex(sig.s));
         if (method === 'eth_signTransaction') return hex(rawTx);
         return await this.rpc('eth_sendRawTransaction', [hex(rawTx)]);
@@ -106,7 +106,7 @@ export class NuWalletProvider implements Eip1193Provider {
 
   /** 빠진 필드를 노드에서 채운다. */
   private async fillTransaction(t: any) {
-    const from = this.account ?? await this.wallet.getAddress(this.path);
+    const from = this.account ?? await this.wallet.getAddress('ethereum', this.path);
     const nonce = t.nonce ?? await this.rpc('eth_getTransactionCount', [from, 'pending']);
     const gasPrice = t.gasPrice ?? await this.rpc('eth_gasPrice', []);
     const gas = t.gas ?? t.gasLimit ?? await this.rpc('eth_estimateGas', [{ ...t, from }]);

@@ -31,18 +31,18 @@ export class NuWallet {
   }
 
   async address(chain: Chain): Promise<string> {
-    const r = await this.transport.send(CMD.GET_CHAIN_ADDRESS, encodeChainPath(chain));
+    const r = await this.transport.send(CMD.GET_ADDRESS, encodeChainPath(chain));
     this.assert(r.status);
     if (chain === 'ethereum') return hex(r.payload);
     return base58(r.payload);
   }
 
   signEthereum(message: Uint8Array, path?: string): Promise<PendingSignature> {
-    return this.beginSign(CMD.SIGN_PERSONAL, concat(encodePath(path ?? "m/44'/60'/0'/0/0"), message));
+    return this.beginSign(CMD.SIGN_PERSONAL, concat(encodeChainPath('ethereum', path), message));
   }
 
   signSolana(message: Uint8Array, path?: string): Promise<PendingSignature> {
-    return this.beginSign(CMD.SIGN_SOLANA, concat(encodePath(path ?? "m/44'/501'/0'/0'"), message));
+    return this.beginSign(CMD.SIGN_TX, concat(encodeChainPath('solana', path), message));
   }
 
   private async beginSign(cmd: number, payload: Uint8Array): Promise<PendingSignature> {

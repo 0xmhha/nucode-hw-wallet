@@ -110,7 +110,7 @@ test('RLP: 명세 예시', () => {
   assert.equal(hex(rlpEncode(new Uint8Array([0x0f]))), '0x0f');
   assert.equal(hex(rlpEncode(new Uint8Array([0x04, 0x00]))), '0x820400');
   assert.equal(hex(rlpEncode(S('Lorem ipsum dolor sit amet, consectetur adipisicing elit'))),
-    '0xb8374c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974');
+    '0xb8384c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974');
 });
 
 test('RLP 정수 인코딩', () => {
@@ -141,7 +141,7 @@ test('EIP-155 서명 대상 인코딩 (명세 예시)', () => {
     '0xec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080');
   // 기기가 계산하는 서명 해시와 같아야 한다
   assert.equal(hex(keccak256(unsigned)),
-    '0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db3cce0b0e7');
+    '0xdaf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53');
 });
 
 test('서명된 트랜잭션 인코딩 (명세 예시)', () => {

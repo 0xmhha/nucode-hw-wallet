@@ -1,12 +1,17 @@
 export { NuWallet } from './client.js';
 export { NuWalletProvider, type ProviderOptions } from './provider.js';
+export { NuWalletAdmin, validatePin, type ApprovalOptions, type LockState } from './pin.js';
 export { BleTransport, type TransportOptions } from './transport.js';
 export {
   SERVICE_UUID, RX_UUID, TX_UUID, CMD, EVT, SW, WalletError,
   DEFAULT_PATH, HARDENED, parsePath, encodePath, hex, fromHex, concat,
   frame, Reassembler, encodeRequest, decodeResponse, decodeEvent,
+  FLAG, PIN, TESTNET, DEFAULT_PATHS,
 } from './protocol.js';
 export { keccak256, toChecksumAddress } from './address.js';
+export {
+  WORDLIST, wordToIndex, indexToWord, mnemonicToIndices, indicesToMnemonic,
+} from './wordlist.js';
 export {
   rlpEncode, toRlpInt, stripZeros,
   encodeLegacyUnsigned, encodeLegacySigned, type LegacyTx,

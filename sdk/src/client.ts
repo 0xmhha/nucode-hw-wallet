@@ -5,8 +5,8 @@
  * 여기서는 명령을 의미 있는 API 로 감싸고, 서명 승인의 비동기 흐름을 다룬다.
  */
 import {
-  CMD, EVT, SW, WalletError, DEFAULT_PATH,
-  encodePath, concat, hex, fromHex,
+  CMD, EVT, SW, WalletError, DEFAULT_PATHS,
+  encodeChainPath, encodePath, concat, hex, fromHex, type Chain,
 } from './protocol.js';
 import { BleTransport, type TransportOptions } from './transport.js';
 import { toChecksumAddress } from './address.js';
@@ -72,7 +72,8 @@ export class NuWallet {
    *     SECURITY.md §3 참고.
    */
   async generateMnemonic(strength: 128 | 256 = 128): Promise<number[]> {
-    const p = await this.cmd(CMD.SETUP_GENERATE, new Uint8Array([strength]));
+    const p = await this.cmd(
+      CMD.SETUP_GENERATE, new Uint8Array([strength === 256 ? 24 : 12]));
     return decodeWords(p);
   }
 
@@ -95,19 +96,27 @@ export class NuWallet {
 
   // ── 계정 ─────────────────────────────────────────────────────────────────
 
-  async getAccount(path: string = DEFAULT_PATH): Promise<AccountInfo> {
-    const p = await this.cmd(CMD.GET_ADDRESS, encodePath(path));
-    if (p.length < 117) throw new WalletError(SW.DEVICE_ERROR, '짧은 응답');
+  /**
+   * 주소와 공개키를 읽는다. docs/protocol.md §5 `0x20 GET_ADDRESS`.
+   * 응답은 체인마다 길이가 달라서 길이 접두사로 온다.
+   */
+  async getAccount(chain: Chain = 'ethereum',
+                   path: string = DEFAULT_PATHS[chain]): Promise<AccountInfo> {
+    const p = await this.cmd(CMD.GET_CHAIN_ADDRESS, encodeChainPath(chain, path));
+    const expected = chain === 'ethereum' ? 20 : 32;
+    if (p.length !== expected) throw new WalletError(SW.DEVICE_ERROR, '주소 응답 길이 불일치');
+
     return {
-      address:   toChecksumAddress(hex(p.subarray(0, 20))),
-      publicKey: hex(p.subarray(20, 85)),
-      chainCode: hex(p.subarray(85, 117)),
+      chain,
       path,
+      address: chain === 'ethereum' ? toChecksumAddress(hex(p)) : base58(p),
+      publicKey: chain === 'solana' ? hex(p) : '',
     };
   }
 
-  async getAddress(path: string = DEFAULT_PATH): Promise<string> {
-    return (await this.getAccount(path)).address;
+  async getAddress(chain: Chain = 'ethereum',
+                   path: string = DEFAULT_PATHS[chain]): Promise<string> {
+    return (await this.getAccount(chain, path)).address;
   }
 
   // ── 서명 ─────────────────────────────────────────────────────────────────
@@ -118,19 +127,23 @@ export class NuWallet {
    *                    **기기가 직접 Keccak-256 을 계산한다.** 해시를 보내지 않는다.
    * @param chainId     EIP-155 v 계산에 쓴다. typed 트랜잭션은 생략한다.
    */
-  async signTransaction(path: string, unsignedTx: Uint8Array | string,
+  async signTransaction(chain: Chain, path: string, unsignedTx: Uint8Array | string,
                         chainId?: number, opts: SignOptions = {}): Promise<Signature> {
     const tx = typeof unsignedTx === 'string' ? fromHex(unsignedTx) : unsignedTx;
+    const raw = await this.pendingCommand(
+      chain === 'solana' ? CMD.SIGN_SOLANA : CMD.SIGN_TX,
+      concat(encodePath(path), tx), opts);
+    if (chain === 'solana') return { raw: hex(raw), serialized: hex(raw) } as Signature;
     const typed = tx.length > 0 && tx[0]! >= 0x01 && tx[0]! <= 0x7f;
-    const raw = await this.pendingCommand(CMD.SIGN_TX, concat(encodePath(path), tx), opts);
     return makeSignature(raw, typed ? 'typed' : 'eip155', chainId);
   }
 
   /** personal_sign (EIP-191). 기기가 접두사를 붙여 해시한다. */
-  async signMessage(path: string, message: Uint8Array | string,
+  async signMessage(path: string = DEFAULT_PATHS.ethereum, message: Uint8Array | string = '',
                     opts: SignOptions = {}): Promise<Signature> {
     const msg = typeof message === 'string' ? new TextEncoder().encode(message) : message;
-    const raw = await this.pendingCommand(CMD.SIGN_PERSONAL, concat(encodePath(path), msg), opts);
+    const raw = await this.pendingCommand(
+      CMD.SIGN_PERSONAL, concat(encodePath(path), msg), opts);
     return makeSignature(raw, 'legacy');
   }
 
@@ -143,7 +156,8 @@ export class NuWallet {
     if (d.length !== 32 || m.length !== 32) {
       throw new WalletError(SW.BAD_PARAM, 'domainSeparator 와 messageHash 는 각각 32바이트여야 합니다');
     }
-    const raw = await this.pendingCommand(CMD.SIGN_TYPED, concat(encodePath(path), d, m), opts);
+    const raw = await this.pendingCommand(
+      CMD.SIGN_TYPED, concat(encodePath(path), d, m), opts);
     return makeSignature(raw, 'legacy');
   }
 
@@ -236,10 +250,12 @@ type VMode = 'legacy' | 'eip155' | 'typed';
  * v 계산 규칙은 docs/protocol.md §6 참고.
  */
 function makeSignature(raw: Uint8Array, mode: VMode, chainId?: number): Signature {
-  if (raw.length < 65) throw new WalletError(SW.DEVICE_ERROR, '서명 길이가 65바이트가 아닙니다');
-  const r = raw.subarray(0, 32);
-  const s = raw.subarray(32, 64);
-  const recid = raw[64]!;
+  // docs/protocol.md §6: [SIG_LEN:1][SIGNATURE]
+  const body = raw.length > 0 && raw[0] === raw.length - 1 ? raw.subarray(1) : raw;
+  if (body.length < 65) throw new WalletError(SW.DEVICE_ERROR, 'Ethereum 서명은 65바이트여야 합니다');
+  const r = body.subarray(0, 32);
+  const s = body.subarray(32, 64);
+  const recid = body[64]!;
 
   let v: number;
   if (mode === 'typed') v = recid;                       // yParity
@@ -254,4 +270,24 @@ function makeSignature(raw: Uint8Array, mode: VMode, chainId?: number): Signatur
     r: hex(r), s: hex(s), recid, v,
     serialized: hex(concat(r, s, new Uint8Array([v & 0xff]))),
   };
+}
+
+
+/** Solana 주소는 공개키의 base58 이다. 의존성 없이 짧게 구현한다. */
+function base58(b: Uint8Array): string {
+  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const digits: number[] = [0];
+  for (const byte of b) {
+    let carry = byte;
+    for (let i = 0; i < digits.length; i++) {
+      carry += digits[i]! << 8;
+      digits[i] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+  }
+  let out = '';
+  for (const byte of b) { if (byte === 0) out += A[0]; else break; }
+  for (let i = digits.length - 1; i >= 0; i--) out += A[digits[i]!];
+  return out;
 }

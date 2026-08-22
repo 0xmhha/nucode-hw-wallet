@@ -21,6 +21,9 @@ export const CMD = {
   SETUP_CONFIRM:   0x11,
   SETUP_RESTORE:   0x12,
   WIPE:            0x13,
+  SET_PIN:         0x14,
+  UNLOCK:          0x15,
+  LOCK:            0x16,
   GET_ADDRESS:     0x20,
   GET_CHAIN_ADDRESS: 0x21,
   SIGN_TX:         0x30,
@@ -36,6 +39,7 @@ export const EVT = {
   CHALLENGE_PROGRESS: 0xa1,
   SIGN_RESULT:        0xa2,
   DEVICE_STATE:       0xa3,
+  REQUEST_RESULT:     0xa4,
 } as const;
 
 export const SW = {
@@ -44,10 +48,12 @@ export const SW = {
   LOCKED:              0x5515,
   CHALLENGE_TIMEOUT:   0x6501,
   CHALLENGE_FAILED:    0x6502,
+  PIN_REQUIRED:        0x6503,
   NOT_INITIALIZED:     0x6982,
   ALREADY_INITIALIZED: 0x6983,
   USER_REJECTED:       0x6985,
   BAD_PARAM:           0x6a80,
+  UNSUPPORTED_CHAIN:   0x6a81,
   TOO_LARGE:           0x6a84,
   UNKNOWN_CMD:         0x6d00,
   DEVICE_ERROR:        0x6f00,
@@ -59,11 +65,13 @@ const SW_TEXT: Record<number, string> = {
   [SW.PENDING]: '접수됨 — 기기에서 승인을 기다리는 중',
   [SW.LOCKED]: '기기가 잠겨 있습니다',
   [SW.CHALLENGE_TIMEOUT]: '승인 시간이 초과되었습니다',
-  [SW.CHALLENGE_FAILED]: '버튼 시퀀스가 3회 틀렸습니다',
+  [SW.CHALLENGE_FAILED]: '버튼 시퀀스가 틀렸습니다',
+  [SW.PIN_REQUIRED]: 'PIN 이 설정되어 있습니다. 먼저 잠금을 해제하세요',
   [SW.NOT_INITIALIZED]: '지갑이 아직 생성되지 않았습니다',
   [SW.ALREADY_INITIALIZED]: '이미 지갑이 있습니다. 먼저 초기화하세요',
   [SW.USER_REJECTED]: '사용자가 거부했습니다',
   [SW.BAD_PARAM]: '요청 형식이 잘못되었습니다',
+  [SW.UNSUPPORTED_CHAIN]: '기기가 지원하지 않는 체인입니다',
   [SW.TOO_LARGE]: '메시지가 너무 큽니다',
   [SW.UNKNOWN_CMD]: '기기가 모르는 명령입니다 (펌웨어 버전 확인)',
   [SW.DEVICE_ERROR]: '기기 내부 오류',
@@ -178,10 +186,21 @@ export const HARDENED = 0x80000000;
 export const DEFAULT_PATH = "m/44'/60'/0'/0/0";
 export const CHAIN = { ETHEREUM: 0x01, SOLANA: 0x02 } as const;
 export type Chain = 'ethereum' | 'solana';
+
+export const CHAIN_ID: Record<Chain, number> = {
+  ethereum: CHAIN.ETHEREUM,
+  solana:   CHAIN.SOLANA,
+};
+
 export const DEFAULT_PATHS: Record<Chain, string> = {
   ethereum: "m/44'/60'/0'/0/0",
-  solana: "m/44'/501'/0'/0'",
+  solana:   "m/44'/501'/0'/0'",   // SLIP-0010: 전부 하드닝
 };
+
+export const TESTNET = {
+  ethereum: { name: 'Sepolia', chainId: 11155111 },
+  solana: { name: 'Devnet', cluster: 'devnet' },
+} as const;
 
 export function parsePath(path: string): number[] {
   const parts = path.replace(/^m\//, '').split('/').filter(Boolean);
@@ -205,8 +224,18 @@ export function encodePath(path: string | number[]): Uint8Array {
   return out;
 }
 
-export function encodeChainPath(chain: Chain, path = DEFAULT_PATHS[chain]): Uint8Array {
-  return concat(new Uint8Array([CHAIN[chain.toUpperCase() as keyof typeof CHAIN]]), encodePath(path));
+/**
+ * docs/protocol.md §3.5 의 CHAIN_PATH.
+ *   [CHAIN:1] [DEPTH:1] [PATH: u32 x DEPTH]
+ * 경로를 받는 모든 명령이 이 형태를 쓴다.
+ */
+export function encodeChainPath(chain: Chain, path: string | number[] = DEFAULT_PATHS[chain]): Uint8Array {
+  const idx = typeof path === 'string' ? parsePath(path) : path;
+  if (chain === 'solana' && idx.some(v => (v >>> 0) < HARDENED)) {
+    throw new WalletError(SW.BAD_PARAM,
+      'Solana 는 SLIP-0010 이라 경로 요소가 전부 하드닝이어야 합니다');
+  }
+  return concat(new Uint8Array([CHAIN_ID[chain]]), encodePath(idx));
 }
 
 export function concat(...parts: Uint8Array[]): Uint8Array {
@@ -228,3 +257,14 @@ export function fromHex(s: string): Uint8Array {
   for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(t.substr(i * 2, 2), 16);
   return out;
 }
+
+/** GET_STATE / GET_VERSION 의 FLAGS 비트. docs/protocol.md §5 */
+export const FLAG = {
+  INITIALIZED:      0x01,
+  LOCKED:           0x02,
+  CHALLENGE_ACTIVE: 0x04,
+  HAS_PIN:          0x08,
+} as const;
+
+/** PIN 정책. docs/protocol.md §8 */
+export const PIN = { MIN: 4, MAX: 8, BUTTONS: 4 } as const;

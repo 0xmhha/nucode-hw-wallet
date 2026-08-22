@@ -14,9 +14,11 @@ export interface DeviceState {
 }
 
 export interface AccountInfo {
-  address: string;           // 0x… 체크섬 적용
-  publicKey: string;         // 0x04…  비압축 65바이트
-  chainCode: string;
+  chain: 'ethereum' | 'solana';
+  /** Ethereum 은 EIP-55 체크섬 0x…, Solana 는 base58 */
+  address: string;
+  /** Ethereum 은 0x04… 65바이트, Solana 는 32바이트 */
+  publicKey: string;
   path: string;
 }
 
@@ -29,7 +31,9 @@ export interface ChallengeCallbacks {
 }
 
 export interface Signature {
-  r: string;                 // 0x… 32바이트
+  /** Solana(ed25519)처럼 r/s 구분이 없는 체인은 raw 만 채워진다. */
+  raw?: string;
+  r: string;                 // 0x… 32바이트 (Ethereum)
   s: string;                 // 0x… 32바이트
   recid: number;             // 0..3
   /** legacy(EIP-155) 또는 personal_sign 규칙으로 계산된 v */
