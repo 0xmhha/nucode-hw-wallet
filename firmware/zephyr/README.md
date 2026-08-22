@@ -14,11 +14,21 @@ v1 을 구현한다.
 ```
 src/app/          플랫폼 독립. 여기에 로직이 전부 있다
   protocol.h        docs/protocol.md 의 상수. SDK 의 protocol.ts 와 1:1
+  hal.h             코어가 플랫폼에 요구하는 전부 (난수/저장/LED/시간/송신)
+  internal.h        아래 조각들 사이의 경계. 밖으로는 wallet.h 만 노출한다
+
   framing.c         BLE 패킷 <-> 메시지 (§2). 동적 할당 없음
   rlp.c             서명 대상 트랜잭션의 형식 검증 + 요약 추출
   store.c           니모닉을 PIN 으로 봉인해 플래시에 넣는 레코드
-  wallet.c          명령 처리 · 챌린지 · PIN · 잠금 상태 기계
-  hal.h             코어가 플랫폼에 요구하는 전부 (난수/저장/LED/시간/송신)
+
+  wire.c      73줄  호스트로 나가는 바이트 — 응답·이벤트 인코딩, LED 출력
+  session.c   94줄  잠금 해제된 세션 — 시드·주소 파생·플래시 레코드
+  challenge.c 274줄 사람의 승인 — 랜덤 챌린지, PIN 입력, 타임아웃, LED 표시
+  commands.c  405줄 프로토콜 — 요청 파싱과 디스패치
+  wallet.c     38줄 생명주기 — 부팅과 연결 해제
+
+각 조각은 하나만 책임진다. 무엇을 보낼지 정하는 것은 commands.c 와
+challenge.c 이고, 어떻게 보내는지는 wire.c 만 안다.
 
 src/port/zephyr/  Zephyr 구현
   hal_zephyr.c      sys_csrand_get, settings(NVS), GPIO LED/버튼 디바운스

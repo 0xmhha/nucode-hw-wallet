@@ -13,8 +13,7 @@ ZSRC   = ../zephyr/src
 # 하나 추가할 때마다 Makefile 을 고치게 하지 않는다.
 CRYPTO  = $(wildcard $(SHARED)/crypto/*.c) $(SHARED)/micro-ecc/uECC.c
 CHAINS  = $(wildcard $(SHARED)/chains/ethereum/*.c)
-APP     = $(ZSRC)/app/framing.c $(ZSRC)/app/rlp.c $(ZSRC)/app/store.c \
-          $(ZSRC)/app/wallet.c $(ZSRC)/port/host/hal_host.c
+APP     = $(wildcard $(ZSRC)/app/*.c) $(ZSRC)/port/host/hal_host.c
 
 .PHONY: all test clean
 all: test_crypto test_wallet protocol_bridge

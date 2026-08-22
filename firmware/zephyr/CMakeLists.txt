@@ -11,6 +11,10 @@ target_sources(app PRIVATE
     src/app/framing.c
     src/app/rlp.c
     src/app/store.c
+    src/app/wire.c
+    src/app/session.c
+    src/app/challenge.c
+    src/app/commands.c
     src/app/wallet.c
 
     src/port/zephyr/hal_zephyr.c

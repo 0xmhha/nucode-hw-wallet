@@ -43,7 +43,8 @@ firmware/
     src/micro-ecc/     secp256k1. recovery id 를 꺼내려고 패치했다
     src/chains/        체인별 해시 헬퍼
   zephyr/            Zephyr 앱  →  firmware/zephyr/README.md
-    src/app/           플랫폼 독립 코어 (프레이밍 · RLP 검증 · 저장 · 상태 기계)
+    src/app/           플랫폼 독립 코어. 책임별로 나뉜다 —
+                       wire(송신) · session(시드) · challenge(승인) · commands(프로토콜)
     src/port/zephyr/   BLE GATT · GPIO · NVS · CSPRNG
     src/port/host/     테스트용
   test/              호스트에서 도는 테스트. 보드도 SDK 도 필요 없다
