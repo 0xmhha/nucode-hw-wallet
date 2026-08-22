@@ -2,8 +2,13 @@
  *
  * 하는 일은 셋뿐이다.
  *   1. HAL 과 BLE 를 올린다
- *   2. 버튼 입력을 코어에 넘긴다
+ *   2. 버튼 입력과 BLE 요청을 코어에 넘긴다
  *   3. 10ms 마다 코어를 틱 시킨다 (타임아웃 · LED)
+ *
+ * 코어는 **오직 이 스레드에서만** 실행된다. 재진입을 가정하지 않기도 하고,
+ * BIP-32 파생과 PBKDF2 가 2KB 넘는 스택을 쓰기 때문이기도 하다 (아래
+ * CONFIG_MAIN_STACK_SIZE). 버튼은 워크큐에서, BLE 요청은 BT RX 스레드에서
+ * 오는데, 둘 다 큐를 거쳐 여기로 모인다.
  *
  * 프로토콜 처리는 전부 app/wallet.c 에 있다. 그쪽은 Zephyr 를 모른다.     */
 #include <zephyr/kernel.h>
@@ -47,12 +52,14 @@ int main(void) {
     LOG_INF("NuWallet 준비됨 (%s)", name);
 
     for (;;) {
+        /* 요청이 오면 즉시 깨고, 없으면 10ms 뒤에 돌아온다. */
+        nu_ble_rx_poll(10);
+
         uint8_t idx;
         while (k_msgq_get(&btn_q, &idx, K_NO_WAIT) == 0) {
             nu_wallet_button(&wallet, idx);
         }
         nu_wallet_tick(&wallet, k_uptime_get_32());
-        k_sleep(K_MSEC(10));
     }
     return 0;
 }

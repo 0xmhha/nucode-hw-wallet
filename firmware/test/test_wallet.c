@@ -230,7 +230,7 @@ static void test_lifecycle(void) {
     ok("초기화 안 됨", (p[3] & NU_FLAG_INITIALIZED) == 0);
 
     /* 지갑이 없으면 서명도 주소도 안 된다 */
-    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x00\x00\x00\x00", 5);
+    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x01\x00\x00\x00\x00", 6);
     ok("지갑 없으면 NOT_INITIALIZED",
        last_response(&status, &p, &len) && status == NU_SW_NOT_INITIALIZED);
 
@@ -281,16 +281,20 @@ static void test_lifecycle(void) {
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
 
-    uint8_t path_req[21] = { 5,
+    /* CHAIN_PATH = [CHAIN][DEPTH][PATH...]  — docs/protocol.md §3.5 */
+    uint8_t path_req[22] = { NU_CHAIN_ETHEREUM, 5,
         0x80,0,0,44, 0x80,0,0,60, 0x80,0,0,0, 0,0,0,0, 0,0,0,0 };
-    request(NU_CMD_GET_ADDRESS, path_req, 21);
-    ok("GET_ADDRESS OK", last_response(&status, &p, &len) && status == NU_SW_OK && len == 117);
-    check_hex("같은 주소", p, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
-    ok("비압축 공개키 접두 0x04", p[20] == 0x04);
+    request(NU_CMD_GET_ADDRESS, path_req, 22);
+    ok("GET_ADDRESS OK", last_response(&status, &p, &len) && status == NU_SW_OK
+       && len == 1 + 20 + 1 + 65);
+    ok("ADDR_LEN = 20", p[0] == 20);
+    check_hex("같은 주소", p + 1, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
+    ok("PUBKEY_LEN = 65", p[21] == 65);
+    ok("비압축 공개키 접두 0x04", p[22] == 0x04);
 
     uint8_t addr[20], pub[65];
-    memcpy(addr, p, 20);
-    memcpy(pub, p + 20, 65);
+    memcpy(addr, p + 1, 20);
+    memcpy(pub, p + 22, 65);
 
     /* 서명 */
     puts("지갑  트랜잭션 서명");
@@ -298,9 +302,9 @@ static void test_lifecycle(void) {
     const size_t rlp_len = unhex(
         "ec098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a764000080018080", rlp);
     uint8_t sign_req[160];
-    memcpy(sign_req, path_req, 21);
-    memcpy(sign_req + 21, rlp, rlp_len);
-    request(NU_CMD_SIGN_TX, sign_req, 21 + rlp_len);
+    memcpy(sign_req, path_req, 22);
+    memcpy(sign_req + 22, rlp, rlp_len);
+    request(NU_CMD_SIGN_TX, sign_req, 22 + rlp_len);
     ok("SIGN_TX PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING && len == 4);
     const uint32_t req_id = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                             ((uint32_t)p[2] << 8) | p[3];
@@ -312,7 +316,7 @@ static void test_lifecycle(void) {
 
     /* 승인 중에는 새 요청을 안 받는다 */
     nu_host_clear_out(&H);
-    request(NU_CMD_GET_ADDRESS, path_req, 21);
+    request(NU_CMD_GET_ADDRESS, path_req, 22);
     ok("진행 중 새 요청 거부",
        last_response(&status, &p, &len) && status == NU_SW_USER_REJECTED);
 
@@ -321,11 +325,11 @@ static void test_lifecycle(void) {
     ev = find_event(NU_EVT_SIGN_RESULT);
     ok("SIGN_RESULT 이벤트", ev != NULL);
     ok("서명 성공", ev && ev->data[7] == 0x90 && ev->data[8] == 0x00);
-    ok("r‖s‖recid 길이", ev && ev->len == 3 + 71);
+    ok("SIG_LEN ‖ r‖s‖recid", ev && ev->len == 3 + 72 && ev->data[9] == 65);
 
     uint8_t sig[64];
     int recid = 0;
-    if (ev) { memcpy(sig, ev->data + 9, 64); recid = ev->data[73]; }
+    if (ev) { memcpy(sig, ev->data + 10, 64); recid = ev->data[74]; }
     uint8_t hash[32];
     keccak256(rlp, rlp_len, hash);
     ok("서명이 주소의 공개키로 검증된다",
@@ -338,14 +342,14 @@ static void test_lifecycle(void) {
     request(NU_CMD_GET_RESULT, idbuf, 4);
     ok("GET_RESULT 로 같은 서명 재조회",
        last_response(&status, &p, &len) && status == NU_SW_OK &&
-       len == 2 + 65 && p[0] == 0x90 && memcmp(p + 2, sig, 64) == 0);
+       len == 2 + 66 && p[0] == 0x90 && p[2] == 65 && memcmp(p + 3, sig, 64) == 0);
 
     /* personal_sign */
     puts("지갑  personal_sign / EIP-712");
     uint8_t ps[64];
-    memcpy(ps, path_req, 21);
-    memcpy(ps + 21, "hello", 5);
-    request(NU_CMD_SIGN_PERSONAL, ps, 26);
+    memcpy(ps, path_req, 22);
+    memcpy(ps + 22, "hello", 5);
+    request(NU_CMD_SIGN_PERSONAL, ps, 27);
     ok("SIGN_PERSONAL PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING);
     nu_host_clear_out(&H);
     approve_challenge();
@@ -357,21 +361,21 @@ static void test_lifecycle(void) {
         keccak256_update(&c, (const uint8_t *)"\x19" "Ethereum Signed Message:\n5", 27);
         keccak256_update(&c, (const uint8_t *)"hello", 5);
         uint8_t h2[32]; keccak256_final(&c, h2);
-        ok("EIP-191 해시로 검증", ecdsa_verify_secp256k1(pub + 1, h2, ev->data + 9));
+        ok("EIP-191 해시로 검증", ecdsa_verify_secp256k1(pub + 1, h2, ev->data + 10));
     }
 
     /* EIP-712: 32+32 바이트가 아니면 거부 */
-    uint8_t typed[21 + 63];
-    memcpy(typed, path_req, 21);
-    memset(typed + 21, 0xab, 63);
-    request(NU_CMD_SIGN_TYPED, typed, 21 + 63);
+    uint8_t typed[22 + 63];
+    memcpy(typed, path_req, 22);
+    memset(typed + 22, 0xab, 63);
+    request(NU_CMD_SIGN_TYPED, typed, 22 + 63);
     ok("EIP-712 길이 오류 거부", last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
 
     /* 취소 */
     puts("지갑  취소 · 타임아웃");
-    memcpy(sign_req, path_req, 21);
-    memcpy(sign_req + 21, rlp, rlp_len);
-    request(NU_CMD_SIGN_TX, sign_req, 21 + rlp_len);
+    memcpy(sign_req, path_req, 22);
+    memcpy(sign_req + 22, rlp, rlp_len);
+    request(NU_CMD_SIGN_TX, sign_req, 22 + rlp_len);
     last_response(&status, &p, &len);
     uint8_t cancel_id[4];
     memcpy(cancel_id, p, 4);
@@ -382,7 +386,7 @@ static void test_lifecycle(void) {
     ok("취소 시 USER_REJECTED", ev && ev->data[7] == 0x69 && ev->data[8] == 0x85);
 
     /* 타임아웃 */
-    request(NU_CMD_SIGN_TX, sign_req, 21 + rlp_len);
+    request(NU_CMD_SIGN_TX, sign_req, 22 + rlp_len);
     nu_host_clear_out(&H);
     H.now += NU_CHALLENGE_TIMEOUT_MS + 100;
     nu_wallet_tick(&W, H.now);
@@ -390,7 +394,7 @@ static void test_lifecycle(void) {
     ok("60초 초과 시 CHALLENGE_TIMEOUT", ev && ev->data[7] == 0x65 && ev->data[8] == 0x01);
 
     /* 3회 틀리면 폐기 */
-    request(NU_CMD_SIGN_TX, sign_req, 21 + rlp_len);
+    request(NU_CMD_SIGN_TX, sign_req, 22 + rlp_len);
     nu_host_clear_out(&H);
     for (int attempt = 0; attempt < 3; attempt++) {
         for (int i = 0; i < 400 && W.req.showing; i++) { H.now += 50; nu_wallet_tick(&W, H.now); }
@@ -430,7 +434,7 @@ static void test_pin(void) {
     /* 잠갔다가 잘못된 PIN */
     request(NU_CMD_LOCK, NULL, 0);
     ok("LOCK OK", last_response(&status, &p, &len) && status == NU_SW_OK);
-    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x05\x80\x00\x00\x2c\x80\x00\x00\x3c\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 21);
+    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x05\x80\x00\x00\x2c\x80\x00\x00\x3c\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 22);
     ok("잠긴 상태에서 주소 거부", last_response(&status, &p, &len) && status == NU_SW_LOCKED);
 
     request(NU_CMD_UNLOCK, NULL, 0);
@@ -450,9 +454,9 @@ static void test_pin(void) {
     ok("UNLOCK 결과 이벤트", ev && ev->data[7] == NU_CMD_UNLOCK && ev->data[8] == 0x90);
     ok("시도 횟수 복원", W.pin_attempts == NU_PIN_ATTEMPTS);
 
-    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x05\x80\x00\x00\x2c\x80\x00\x00\x3c\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 21);
+    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x05\x80\x00\x00\x2c\x80\x00\x00\x3c\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", 22);
     ok("해제 후 주소 조회", last_response(&status, &p, &len) && status == NU_SW_OK);
-    check_hex("PIN 을 걸어도 같은 주소", p, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
+    check_hex("PIN 을 걸어도 같은 주소", p + 1, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
 
     /* 재부팅해도 유지되고, 부팅 직후에는 잠겨 있다 */
     boot(0x4243, 1);
@@ -470,6 +474,58 @@ static void test_pin(void) {
     /* 연결이 끊기면 다시 잠긴다 */
     nu_wallet_disconnected(&W);
     ok("연결 해제 시 자동 잠금", W.unlocked == 0);
+}
+
+/* 시도 횟수가 RAM 에만 있으면 전원을 껐다 켜는 것만으로 제한이 사라진다.
+ * 카운터는 플래시에 있어야 하고, 바닥나면 시드를 지워야 한다. */
+static void test_pin_attempts_survive_reboot(void) {
+    puts("지갑  PIN 시도 제한");
+    boot(0x5150, 0);
+
+    uint16_t status; const uint8_t *p; size_t len;
+    uint8_t restore[64]; uint8_t count;
+    abandon_words(restore, &count);
+    request(NU_CMD_SETUP_RESTORE, restore, 25);
+    last_response(&status, &p, &len);
+
+    const uint8_t setpin[5] = { 4, 0, 3, 1, 2 };
+    const uint8_t wrong[4] = { 1, 1, 1, 1 };
+    request(NU_CMD_SET_PIN, setpin, 5);
+    approve_challenge();
+    ok("PIN 설정", nu_store_has_pin(W.rec));
+    ok("새 레코드는 시도 횟수가 만수",
+       nu_store_tries(W.rec, W.rec_len) == NU_PIN_ATTEMPTS);
+
+    /* 한 번 틀린다 */
+    request(NU_CMD_LOCK, NULL, 0);
+    request(NU_CMD_UNLOCK, NULL, 0);
+    last_response(&status, &p, &len);
+    press_pin(wrong, 4);
+    ok("틀리면 카운터가 준다", W.pin_attempts == NU_PIN_ATTEMPTS - 1);
+    ok("줄어든 값이 플래시에 남는다",
+       nu_store_tries(H.store, H.store_len) == NU_PIN_ATTEMPTS - 1);
+
+    /* 전원을 껐다 켠다 — 예전에는 여기서 카운터가 되살아났다 */
+    boot(0x5151, 1);
+    ok("재부팅해도 카운터가 살아 있다", W.pin_attempts == NU_PIN_ATTEMPTS - 1);
+
+    /* 남은 횟수를 전부 소진시킨다 */
+    for (int i = NU_PIN_ATTEMPTS - 1; i > 0; i--) {
+        request(NU_CMD_UNLOCK, NULL, 0);
+        last_response(&status, &p, &len);
+        press_pin(wrong, 4);
+    }
+    ok("소진되면 카운터가 0", W.pin_attempts == 0);
+    ok("소진되면 지갑을 지운다", W.rec_len == 0 && H.store_len == 0);
+
+    request(NU_CMD_GET_STATE, NULL, 0);
+    ok("지워진 뒤에는 미초기화 상태",
+       last_response(&status, &p, &len) && !(p[0] & NU_FLAG_INITIALIZED));
+
+    /* 맞는 PIN 을 알아도 이제 열 것이 없다 */
+    request(NU_CMD_UNLOCK, NULL, 0);
+    ok("지워진 뒤 UNLOCK 은 NOT_INITIALIZED",
+       last_response(&status, &p, &len) && status == NU_SW_NOT_INITIALIZED);
 }
 
 static void test_passphrase_and_wipe(void) {
@@ -529,17 +585,17 @@ static void test_bad_input(void) {
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
 
-    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x09\x00", 2);
+    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x09\x00", 3);
     ok("경로 depth 초과", last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
 
-    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x05\x00", 2);
+    request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x05\x00", 3);
     ok("경로 길이 부족", last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
 
     uint8_t sign_req[64];
-    const uint8_t path_req[21] = { 5,
+    const uint8_t path_req[22] = { NU_CHAIN_ETHEREUM, 5,
         0x80,0,0,44, 0x80,0,0,60, 0x80,0,0,0, 0,0,0,0, 0,0,0,0 };
-    memcpy(sign_req, path_req, 21);
-    memcpy(sign_req + 21, "\xde\xad\xbe\xef", 4);
+    memcpy(sign_req, path_req, 22);
+    memcpy(sign_req + 22, "\xde\xad\xbe\xef", 4);
     request(NU_CMD_SIGN_TX, sign_req, 25);
     ok("RLP 아닌 서명 요청 거부",
        last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
@@ -563,6 +619,7 @@ int main(void) {
     test_store();
     test_lifecycle();
     test_pin();
+    test_pin_attempts_survive_reboot();
     test_passphrase_and_wipe();
     test_bad_input();
     printf("\n%d개 중 %d개 실패\n", total, fails);

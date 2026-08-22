@@ -14,16 +14,16 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: 'NuWallet — Ethereum & Solana Hardware Wallet',
-  description: 'NU-40 DK 기반 Ethereum Sepolia 및 Solana Devnet 하드웨어 지갑 설정',
+  description: 'NU-40 DK 기반 Base Sepolia 및 Solana Testnet 하드웨어 지갑 설정',
   openGraph: {
     title: 'NuWallet Setup',
-    description: 'Ethereum Sepolia와 Solana Devnet 하드웨어 지갑',
+    description: 'Base Sepolia와 Solana Testnet 하드웨어 지갑',
     images: ['/og.png'],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'NuWallet Setup',
-    description: 'Ethereum Sepolia와 Solana Devnet 하드웨어 지갑',
+    description: 'Base Sepolia와 Solana Testnet 하드웨어 지갑',
     images: ['/og.png'],
   },
 };

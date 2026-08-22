@@ -29,16 +29,26 @@ static void leds(nu_wallet *w, uint8_t mask) {
     w->hal->leds(mask, w->hal->ctx);
 }
 
+/* 송신 조립 버퍼.
+ *
+ * 스택에 두면 reply() 가 불리는 깊은 프레임마다 그만큼 얹힌다 — 코어는 이미
+ * BIP-32·PBKDF2 로 2KB 넘게 쓴다. 코어는 메인 스레드 한 곳에서만 돌고
+ * (main.c 참고) reply/event 는 hal->send 가 끝나기 전에 돌아오지 않으므로,
+ * 파일 정적 버퍼 하나를 돌려 써도 안전하다.
+ *
+ * 크기는 프레이밍 한계와 맞춘다. 예전에는 128바이트라서 그보다 큰 응답이
+ * 조용히 DEVICE_ERROR 로 바뀌었다 — 2048바이트까지 쪼개 보낼 수 있는데도. */
+static uint8_t tx_buf[NU_MAX_MESSAGE];
+
 static void reply(nu_wallet *w, uint16_t status, const uint8_t *payload, size_t len) {
-    uint8_t msg[4 + 128];
-    if (len > sizeof msg - 4) { status = NU_SW_DEVICE_ERROR; len = 0; }
-    be16(msg, status);
-    be16(msg + 2, (uint16_t)len);
-    if (len) memcpy(msg + 4, payload, len);
-    w->hal->send(NU_TAG_MESSAGE, msg, 4 + len, w->hal->ctx);
+    if (len > sizeof tx_buf - 4) { status = NU_SW_TOO_LARGE; len = 0; }
+    be16(tx_buf, status);
+    be16(tx_buf + 2, (uint16_t)len);
+    if (len) memcpy(tx_buf + 4, payload, len);
+    w->hal->send(NU_TAG_MESSAGE, tx_buf, 4 + len, w->hal->ctx);
 }
 
-/* 니모닉은 최대 24*2 = 48바이트라 위 버퍼로 충분하지만, 명시적으로 분리한다. */
+/* 니모닉은 최대 24*2 = 48바이트다. */
 static void reply_words(nu_wallet *w, const uint16_t *words, uint8_t count) {
     uint8_t p[1 + 24 * 2];
     p[0] = count;
@@ -47,12 +57,11 @@ static void reply_words(nu_wallet *w, const uint16_t *words, uint8_t count) {
 }
 
 static void event(nu_wallet *w, uint8_t evt, const uint8_t *payload, size_t len) {
-    uint8_t msg[3 + 80];
-    if (len > sizeof msg - 3) return;
-    msg[0] = evt;
-    be16(msg + 1, (uint16_t)len);
-    if (len) memcpy(msg + 3, payload, len);
-    w->hal->send(NU_TAG_EVENT, msg, 3 + len, w->hal->ctx);
+    if (len > sizeof tx_buf - 3) return;
+    tx_buf[0] = evt;
+    be16(tx_buf + 1, (uint16_t)len);
+    if (len) memcpy(tx_buf + 3, payload, len);
+    w->hal->send(NU_TAG_EVENT, tx_buf, 3 + len, w->hal->ctx);
 }
 
 uint8_t nu_wallet_flags(const nu_wallet *w) {
@@ -125,6 +134,30 @@ static int persist(nu_wallet *w, const uint16_t *words, uint8_t count,
     return 1;
 }
 
+/* 남은 PIN 시도 횟수를 플래시에 반영한다.
+ *
+ * RAM 에만 두면 전원을 껐다 켜는 것만으로 카운터가 되살아나 무한히 시도할 수
+ * 있었다. TRIES 는 MAC 밖이라 PIN 없이도 고쳐 쓸 수 있다 — store.h 참고. */
+static void persist_tries(nu_wallet *w, uint8_t tries) {
+    if (!w->rec_len) return;
+    w->pin_attempts = tries;
+    w->rec_len = nu_store_set_tries(w->rec, w->rec_len, tries);
+    if (!w->hal->store_write(w->rec, w->rec_len, w->hal->ctx)) {
+        /* 쓰기가 실패하면 카운터를 못 줄인 것이다. 무한 시도를 허용하느니
+         * 이번 시도를 실패로 끝낸다. */
+        w->pin_attempts = 0;
+    }
+}
+
+/* 시도 횟수가 바닥났다. 지갑을 지운다 — 주운 보드로 계속 눌러 볼 수 없게. */
+static void wipe_record(nu_wallet *w) {
+    w->hal->store_erase(w->hal->ctx);
+    memset(w->rec, 0, sizeof w->rec);
+    w->rec_len = 0;
+    w->tmp_count = 0;
+    lock(w);
+}
+
 /* ── 챌린지 ─────────────────────────────────────────────────────────────── */
 
 static void request_clear(nu_wallet *w) {
@@ -147,14 +180,17 @@ static void finish(nu_wallet *w, uint16_t status,
     const uint8_t cmd = w->req.cmd;
 
     if (cmd == NU_CMD_SIGN_TX || cmd == NU_CMD_SIGN_PERSONAL || cmd == NU_CMD_SIGN_TYPED) {
-        uint8_t p[6 + 65];
+        /* docs/protocol.md §6: REQUEST_ID(4) ‖ STATUS(2) ‖ SIG_LEN(1) ‖ SIGNATURE
+         * 길이 접두사가 있어야 체인마다 다른 서명 길이를 SDK 가 구분할 수 있다. */
+        uint8_t p[7 + 65];
         be32(p, id);
         be16(p + 4, status);
         size_t n = 6;
         if (status == NU_SW_OK && sig64) {
-            memcpy(p + 6, sig64, 64);
-            p[70] = (uint8_t)recid;
-            n = 71;
+            p[6] = 65;                      /* Ethereum: r ‖ s ‖ recid */
+            memcpy(p + 7, sig64, 64);
+            p[71] = (uint8_t)recid;
+            n = 72;
         }
         remember(w, id, status, p + 6, (uint8_t)(n - 6));
         event(w, NU_EVT_SIGN_RESULT, p, n);
@@ -251,7 +287,7 @@ static void challenge_approved(nu_wallet *w) {
         if (ok) {
             memcpy(w->pin, r->new_pin, NU_PIN_MAX);
             w->pin_len = r->new_pin_len;
-            w->pin_attempts = NU_PIN_ATTEMPTS;
+            w->pin_attempts = NU_PIN_ATTEMPTS;   /* persist() 가 만수로 새로 봉인했다 */
         }
         finish(w, ok ? NU_SW_OK : NU_SW_DEVICE_ERROR, NULL, 0);
         return;
@@ -274,7 +310,7 @@ static void pin_entered(nu_wallet *w) {
         w->word_count = count;
         memcpy(w->pin, r->seq, NU_PIN_MAX);
         w->pin_len = r->seq_len;
-        w->pin_attempts = NU_PIN_ATTEMPTS;
+        if (w->pin_attempts != NU_PIN_ATTEMPTS) persist_tries(w, NU_PIN_ATTEMPTS);
         const int ok = seed_from_words(w, words, count, r->passphrase);
         w->unlocked = ok;
         memset(words, 0, sizeof words);
@@ -284,11 +320,15 @@ static void pin_entered(nu_wallet *w) {
     memset(words, 0, sizeof words);
 
     r->pos = 0;
-    if (w->pin_attempts) w->pin_attempts--;
+    if (w->pin_attempts) persist_tries(w, (uint8_t)(w->pin_attempts - 1));
     r->attempts = w->pin_attempts;
     progress(w);
-    if (w->pin_attempts == 0) finish(w, NU_SW_CHALLENGE_FAILED, NULL, 0);
-    else r->started_ms = w->hal->millis(w->hal->ctx);   /* 다음 시도에 시간을 다시 준다 */
+    if (w->pin_attempts == 0) {
+        wipe_record(w);                 /* 소진 — 시드를 지운다 */
+        finish(w, NU_SW_CHALLENGE_FAILED, NULL, 0);
+    } else {
+        r->started_ms = w->hal->millis(w->hal->ctx);   /* 다음 시도에 시간을 다시 준다 */
+    }
 }
 
 void nu_wallet_button(nu_wallet *w, uint8_t idx) {
@@ -332,6 +372,24 @@ static size_t read_path(const uint8_t *p, size_t len, uint32_t *path, uint8_t *d
     *depth = d;
     return 1u + (size_t)d * 4u;
 }
+
+/* CHAIN ‖ DEPTH ‖ PATH 를 읽는다 (docs/protocol.md §3.5).
+ *
+ * 경로를 받는 모든 명령이 앞에 체인 바이트를 하나 둔다. 기기는 체인 바이트로
+ * 곡선과 파생 규칙만 고른다 — 어느 네트워크인지는 모르고, 알 필요도 없다.
+ *
+ * 반환값: 소비한 바이트 수. 형식 오류면 0, 모르는 체인이면 (size_t)-1. */
+#define READ_CHAIN_BAD   ((size_t)0)
+#define READ_CHAIN_OTHER ((size_t)-1)
+
+static size_t read_chain_path(const uint8_t *p, size_t len,
+                              uint32_t *path, uint8_t *depth) {
+    if (len < 1) return READ_CHAIN_BAD;
+    if (p[0] != NU_CHAIN_ETHEREUM) return READ_CHAIN_OTHER;
+    const size_t used = read_path(p + 1, len - 1, path, depth);
+    return used ? used + 1 : READ_CHAIN_BAD;
+}
+
 
 /* COUNT ‖ WORD_IDX* 를 읽는다. 소비한 바이트 수, 오류면 0. */
 static size_t read_words(const uint8_t *p, size_t len, uint16_t *words, uint8_t *count) {
@@ -476,6 +534,7 @@ static void cmd_unlock(nu_wallet *w, const uint8_t *p, size_t len) {
 
     if (w->pin_attempts == 0) { reply(w, NU_SW_CHALLENGE_FAILED, NULL, 0); return; }
 
+
     const uint8_t pin_len = nu_store_pin_len(w->rec);
     if (pin_len == 0) {
         /* PIN 이 없으면 버튼 입력 없이 바로 연다. */
@@ -505,17 +564,42 @@ static void cmd_unlock(nu_wallet *w, const uint8_t *p, size_t len) {
     challenge_start(w, NU_CMD_UNLOCK, 1, pin_len);
 }
 
-static void cmd_get_address(nu_wallet *w, const uint8_t *p, size_t len) {
-    if (!w->rec_len) { reply(w, NU_SW_NOT_INITIALIZED, NULL, 0); return; }
-    if (!w->unlocked) { reply(w, NU_SW_LOCKED, NULL, 0); return; }
-    uint32_t path[8]; uint8_t depth = 0;
-    if (!read_path(p, len, path, &depth)) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
+/* 경로를 받는 명령의 공통 앞부분. 통과하면 1, 아니면 응답까지 보내고 0. */
+static int take_chain_path(nu_wallet *w, const uint8_t *p, size_t len,
+                           uint32_t *path, uint8_t *depth, size_t *used) {
+    if (!w->rec_len) { reply(w, NU_SW_NOT_INITIALIZED, NULL, 0); return 0; }
+    if (!w->unlocked) { reply(w, NU_SW_LOCKED, NULL, 0); return 0; }
+    const size_t n = read_chain_path(p, len, path, depth);
+    if (n == READ_CHAIN_OTHER) { reply(w, NU_SW_UNSUPPORTED_CHAIN, NULL, 0); return 0; }
+    if (n == READ_CHAIN_BAD)   { reply(w, NU_SW_BAD_PARAM, NULL, 0); return 0; }
+    *used = n;
+    return 1;
+}
 
-    uint8_t out[20 + 65 + 32];
-    if (!derive_addr(w, path, depth, out, out + 20, out + 85, NULL)) {
+static void cmd_get_address(nu_wallet *w, const uint8_t *p, size_t len) {
+    uint32_t path[8]; uint8_t depth = 0; size_t used = 0;
+    if (!take_chain_path(w, p, len, path, &depth, &used)) return;
+
+    /* 응답은 길이 접두사를 붙인다 — 체인마다 주소·공개키 길이가 다르다. */
+    uint8_t out[1 + 20 + 1 + 65];
+    out[0] = 20;
+    out[21] = 65;
+    if (!derive_addr(w, path, depth, out + 1, out + 22, NULL, NULL)) {
         reply(w, NU_SW_DEVICE_ERROR, NULL, 0); return;
     }
     reply(w, NU_SW_OK, out, sizeof out);
+}
+
+/* 0x21 — 주소만. 공개키도 chain code 도 주지 않는다. */
+static void cmd_get_chain_address(nu_wallet *w, const uint8_t *p, size_t len) {
+    uint32_t path[8]; uint8_t depth = 0; size_t used = 0;
+    if (!take_chain_path(w, p, len, path, &depth, &used)) return;
+
+    uint8_t addr[20];
+    if (!derive_addr(w, path, depth, addr, NULL, NULL, NULL)) {
+        reply(w, NU_SW_DEVICE_ERROR, NULL, 0); return;
+    }
+    reply(w, NU_SW_OK, addr, sizeof addr);
 }
 
 /* 서명 3종의 공통 진입점 — 해시는 각 명령이 만들어서 넘긴다. */
@@ -528,9 +612,9 @@ static void start_sign(nu_wallet *w, uint8_t cmd, const uint32_t *path, uint8_t 
 }
 
 static void cmd_sign_tx(nu_wallet *w, const uint8_t *p, size_t len) {
-    uint32_t path[8]; uint8_t depth = 0;
-    const size_t used = read_path(p, len, path, &depth);
-    if (!used || len == used) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
+    uint32_t path[8]; uint8_t depth = 0; size_t used = 0;
+    if (!take_chain_path(w, p, len, path, &depth, &used)) return;
+    if (len == used) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
 
     nu_tx_summary tx;
     if (!nu_tx_parse(p + used, len - used, &tx)) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
@@ -543,9 +627,8 @@ static void cmd_sign_tx(nu_wallet *w, const uint8_t *p, size_t len) {
 }
 
 static void cmd_sign_personal(nu_wallet *w, const uint8_t *p, size_t len) {
-    uint32_t path[8]; uint8_t depth = 0;
-    const size_t used = read_path(p, len, path, &depth);
-    if (!used) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
+    uint32_t path[8]; uint8_t depth = 0; size_t used = 0;
+    if (!take_chain_path(w, p, len, path, &depth, &used)) return;
     const size_t mlen = len - used;
 
     /* "\x19Ethereum Signed Message:\n" ‖ len ‖ message  (EIP-191) */
@@ -569,9 +652,9 @@ static void cmd_sign_personal(nu_wallet *w, const uint8_t *p, size_t len) {
 }
 
 static void cmd_sign_typed(nu_wallet *w, const uint8_t *p, size_t len) {
-    uint32_t path[8]; uint8_t depth = 0;
-    const size_t used = read_path(p, len, path, &depth);
-    if (!used || len - used != 64) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
+    uint32_t path[8]; uint8_t depth = 0; size_t used = 0;
+    if (!take_chain_path(w, p, len, path, &depth, &used)) return;
+    if (len - used != 64) { reply(w, NU_SW_BAD_PARAM, NULL, 0); return; }
 
     uint8_t buf[66];
     buf[0] = 0x19; buf[1] = 0x01;
@@ -644,7 +727,13 @@ void nu_wallet_handle(nu_wallet *w, const uint8_t *msg, size_t len) {
         reply(w, NU_SW_OK, NULL, 0);
         emit_state(w);
         break;
-    case NU_CMD_GET_ADDRESS:    cmd_get_address(w, p, plen); break;
+    case NU_CMD_GET_ADDRESS:       cmd_get_address(w, p, plen); break;
+    case NU_CMD_GET_CHAIN_ADDRESS: cmd_get_chain_address(w, p, plen); break;
+    case NU_CMD_SIGN_SOLANA:
+        /* ed25519 파생·서명이 아직 없다. UNKNOWN_CMD 로 답하면 펌웨어가 낡은
+         * 것처럼 보이므로, 명령은 알지만 체인을 못 다룬다고 정확히 말한다. */
+        reply(w, NU_SW_UNSUPPORTED_CHAIN, NULL, 0);
+        break;
     case NU_CMD_SIGN_TX:
     case NU_CMD_SIGN_PERSONAL:
     case NU_CMD_SIGN_TYPED:
@@ -739,6 +828,9 @@ void nu_wallet_init(nu_wallet *w, const nu_hal *hal, const char *device_name) {
     if (n && nu_store_valid(raw, n)) {
         memcpy(w->rec, raw, n);
         w->rec_len = n;
+        /* 카운터는 전원을 꺼도 살아 있어야 한다. 재부팅으로 초기화되면
+         * PIN 시도 제한이 아무 의미가 없다. */
+        w->pin_attempts = nu_store_tries(w->rec, w->rec_len);
     }
     memset(raw, 0, sizeof raw);
 }

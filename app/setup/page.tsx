@@ -17,6 +17,7 @@ import {
   mnemonicToIndices, type LockState,
 } from '@/sdk/src/index';
 import s from './setup.module.css';
+import { WebAppFooter } from '../components/WebAppFooter';
 
 const BUTTON_LABELS = ['1', '2', '3', '4'];   // 화면 표기는 1~4, 프로토콜 값은 0~3
 
@@ -152,8 +153,10 @@ export default function SetupPage() {
       <nav className={s.nav}>
         <div className={s.brand}><span className={s.mark}>NU</span><span>NuWallet 기기 설정</span></div>
         <div className={s.links}>
-          <Link href="/">← 지갑 생성</Link>
-          <Link href="/dapp">예제 DApp →</Link>
+          <Link href="/">지갑</Link>
+          <Link href="/setup">설정</Link>
+          <Link href="/dapp">트랜잭션 테스트</Link>
+          <Link href="/debug">BLE 디버그</Link>
         </div>
       </nav>
 
@@ -292,6 +295,7 @@ export default function SetupPage() {
         <span className={`${s.led} ${connected ? s.online : ''}`} />
         <strong>{status}</strong>
       </aside>
+      <WebAppFooter />
     </main>
   );
 }

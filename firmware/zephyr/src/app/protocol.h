@@ -56,6 +56,7 @@
 #define NU_SW_ALREADY_INITIALIZED 0x6983
 #define NU_SW_USER_REJECTED       0x6985
 #define NU_SW_BAD_PARAM           0x6a80
+#define NU_SW_UNSUPPORTED_CHAIN   0x6a81
 #define NU_SW_TOO_LARGE           0x6a84
 #define NU_SW_UNKNOWN_CMD         0x6d00
 #define NU_SW_DEVICE_ERROR        0x6f00

@@ -6,7 +6,7 @@
  */
 import {
   CMD, EVT, SW, WalletError, DEFAULT_PATHS,
-  encodeChainPath, encodePath, concat, hex, fromHex, type Chain,
+  encodeChainPath, concat, hex, fromHex, type Chain,
 } from './protocol.js';
 import { BleTransport, type TransportOptions } from './transport.js';
 import { toChecksumAddress } from './address.js';
@@ -102,21 +102,34 @@ export class NuWallet {
    */
   async getAccount(chain: Chain = 'ethereum',
                    path: string = DEFAULT_PATHS[chain]): Promise<AccountInfo> {
-    const p = await this.cmd(CMD.GET_CHAIN_ADDRESS, encodeChainPath(chain, path));
-    const expected = chain === 'ethereum' ? 20 : 32;
-    if (p.length !== expected) throw new WalletError(SW.DEVICE_ERROR, '주소 응답 길이 불일치');
+    const p = await this.cmd(CMD.GET_ADDRESS, encodeChainPath(chain, path));
+    // ADDR_LEN(1) ‖ ADDRESS ‖ PUBKEY_LEN(1) ‖ PUBKEY — 체인마다 길이가 다르다.
+    if (p.length < 2) throw new WalletError(SW.DEVICE_ERROR, '주소 응답이 짧습니다');
+    const alen = p[0]!;
+    if (p.length < 2 + alen) throw new WalletError(SW.DEVICE_ERROR, '주소 응답 길이 불일치');
+    const addr = p.subarray(1, 1 + alen);
+    const plen = p[1 + alen]!;
+    if (p.length < 2 + alen + plen) throw new WalletError(SW.DEVICE_ERROR, '공개키 응답 길이 불일치');
+    const pub = p.subarray(2 + alen, 2 + alen + plen);
 
     return {
       chain,
       path,
-      address: chain === 'ethereum' ? toChecksumAddress(hex(p)) : base58(p),
-      publicKey: chain === 'solana' ? hex(p) : '',
+      address: chain === 'ethereum' ? toChecksumAddress(hex(addr)) : base58(addr),
+      publicKey: hex(pub),
     };
   }
 
+  /**
+   * 주소만 필요할 때. `0x21 GET_CHAIN_ADDRESS` 는 공개키를 싣지 않아 응답이
+   * 짧다 — 연결 직후처럼 자주 부르는 경로에서 쓴다.
+   */
   async getAddress(chain: Chain = 'ethereum',
                    path: string = DEFAULT_PATHS[chain]): Promise<string> {
-    return (await this.getAccount(chain, path)).address;
+    const p = await this.cmd(CMD.GET_CHAIN_ADDRESS, encodeChainPath(chain, path));
+    const expected = chain === 'ethereum' ? 20 : 32;
+    if (p.length !== expected) throw new WalletError(SW.DEVICE_ERROR, '주소 응답 길이 불일치');
+    return chain === 'ethereum' ? toChecksumAddress(hex(p)) : base58(p);
   }
 
   // ── 서명 ─────────────────────────────────────────────────────────────────
@@ -132,8 +145,11 @@ export class NuWallet {
     const tx = typeof unsignedTx === 'string' ? fromHex(unsignedTx) : unsignedTx;
     const raw = await this.pendingCommand(
       chain === 'solana' ? CMD.SIGN_SOLANA : CMD.SIGN_TX,
-      concat(encodePath(path), tx), opts);
-    if (chain === 'solana') return { raw: hex(raw), serialized: hex(raw) } as Signature;
+      concat(encodeChainPath(chain, path), tx), opts);
+    if (chain === 'solana') {
+      const sig = takeSig(raw, 64);
+      return { raw: hex(sig), serialized: hex(sig) } as Signature;
+    }
     const typed = tx.length > 0 && tx[0]! >= 0x01 && tx[0]! <= 0x7f;
     return makeSignature(raw, typed ? 'typed' : 'eip155', chainId);
   }
@@ -143,7 +159,7 @@ export class NuWallet {
                     opts: SignOptions = {}): Promise<Signature> {
     const msg = typeof message === 'string' ? new TextEncoder().encode(message) : message;
     const raw = await this.pendingCommand(
-      CMD.SIGN_PERSONAL, concat(encodePath(path), msg), opts);
+      CMD.SIGN_PERSONAL, concat(encodeChainPath('ethereum', path), msg), opts);
     return makeSignature(raw, 'legacy');
   }
 
@@ -157,7 +173,7 @@ export class NuWallet {
       throw new WalletError(SW.BAD_PARAM, 'domainSeparator 와 messageHash 는 각각 32바이트여야 합니다');
     }
     const raw = await this.pendingCommand(
-      CMD.SIGN_TYPED, concat(encodePath(path), d, m), opts);
+      CMD.SIGN_TYPED, concat(encodeChainPath('ethereum', path), d, m), opts);
     return makeSignature(raw, 'legacy');
   }
 
@@ -209,6 +225,12 @@ export class NuWallet {
           const status = edv.getUint16(4, false);
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(p.subarray(6)));
+        } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
+          // WIPE 처럼 서명이 아닌 승인 요청의 결과. 돌려줄 페이로드가 없다.
+          // 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6.
+          const status = edv.getUint16(5, false);
+          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
+          else finish(() => resolve(new Uint8Array()));
         }
       });
       const offDisc = this.transport.onDisconnect(() => {
@@ -243,6 +265,20 @@ function decodeWords(p: Uint8Array): number[] {
   return out;
 }
 
+/** SIG_LEN ‖ SIGNATURE 에서 서명만 꺼낸다. */
+function takeSig(raw: Uint8Array, expectedLength: number): Uint8Array {
+  /* 초기 Arduino 펌웨어는 SIG_LEN 없이 서명만 보냈다. 전체 길이가 체인별
+   * 고정 길이와 정확히 같을 때만 레거시 응답으로 인정한다. */
+  if (raw.length === expectedLength) return raw;
+  if (raw.length < 1) throw new WalletError(SW.DEVICE_ERROR, '서명이 비어 있습니다');
+  const n = raw[0]!;
+  if (n !== expectedLength || raw.length !== 1 + n) {
+    throw new WalletError(SW.DEVICE_ERROR,
+      `서명 길이가 맞지 않습니다 (SIG_LEN=${n}, 실제 ${raw.length - 1})`);
+  }
+  return raw.subarray(1, 1 + n);
+}
+
 type VMode = 'legacy' | 'eip155' | 'typed';
 
 /**
@@ -250,9 +286,16 @@ type VMode = 'legacy' | 'eip155' | 'typed';
  * v 계산 규칙은 docs/protocol.md §6 참고.
  */
 function makeSignature(raw: Uint8Array, mode: VMode, chainId?: number): Signature {
-  // docs/protocol.md §6: [SIG_LEN:1][SIGNATURE]
-  const body = raw.length > 0 && raw[0] === raw.length - 1 ? raw.subarray(1) : raw;
-  if (body.length < 65) throw new WalletError(SW.DEVICE_ERROR, 'Ethereum 서명은 65바이트여야 합니다');
+  /* docs/protocol.md §6: SIG_LEN(1) ‖ SIGNATURE
+   *
+   * 길이 접두사를 "있으면 쓰고 없으면 만다" 식으로 추측하면 안 된다.
+   * r 의 첫 바이트가 우연히 64 인 서명이 256개 중 하나꼴로 나오는데, 그때
+   * 한 바이트를 잘라내고 엉뚱한 서명을 만들어 낸다. */
+  const body = takeSig(raw, 65);
+  if (body.length !== 65) {
+    throw new WalletError(SW.DEVICE_ERROR,
+      `Ethereum 서명은 65바이트여야 합니다 (받은 길이 ${body.length})`);
+  }
   const r = body.subarray(0, 32);
   const s = body.subarray(32, 64);
   const recid = body[64]!;

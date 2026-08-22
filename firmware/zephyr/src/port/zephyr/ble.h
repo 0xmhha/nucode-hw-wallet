@@ -12,4 +12,11 @@ int nu_ble_start(nu_wallet *w, nu_hal *hal, char *name_out, size_t name_cap);
 /* 연결 여부. */
 int nu_ble_connected(void);
 
+/* 조립이 끝난 요청 하나를 코어에 넘긴다. 없으면 최대 timeout_ms 기다린다.
+ *
+ * **반드시 메인 스레드에서 불러야 한다.** 지갑 코어는 BIP-32 파생과 PBKDF2 로
+ * 2KB 넘는 스택을 쓰는데, GATT 콜백이 도는 BT RX 스레드 스택은 그보다 훨씬
+ * 작아서 콜백 안에서 코어를 부르면 스택이 넘친다. */
+void nu_ble_rx_poll(int timeout_ms);
+
 #endif

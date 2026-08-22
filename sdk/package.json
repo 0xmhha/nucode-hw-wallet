@@ -5,16 +5,40 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "files": ["dist", "README.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test test/*.test.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test": "node --test --test-timeout 20000 test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "npm run build && make -C ../firmware/test protocol_bridge"
   },
-  "keywords": ["ethereum", "solana", "hardware-wallet", "web-bluetooth", "ed25519", "nrf52"],
+  "keywords": [
+    "ethereum",
+    "solana",
+    "hardware-wallet",
+    "web-bluetooth",
+    "ed25519",
+    "nrf52"
+  ],
   "license": "MIT",
-  "devDependencies": { "typescript": "^5.6.0" },
-  "peerDependencies": { "ethers": "^6.0.0" },
-  "peerDependenciesMeta": { "ethers": { "optional": true } }
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "peerDependencies": {
+    "ethers": "^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ethers": {
+      "optional": true
+    }
+  }
 }

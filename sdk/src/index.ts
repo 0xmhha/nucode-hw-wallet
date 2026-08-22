@@ -1,7 +1,12 @@
 export { NuWallet } from './client.js';
 export { NuWalletProvider, type ProviderOptions } from './provider.js';
+export { announceNuWalletProvider, type Eip6963ProviderInfo } from './browser.js';
+export {
+  NuWalletSolanaAdapter,
+  type SolanaAdapterOptions, type SolanaTransactionLike, type SolanaWeb3Like,
+} from './solana.js';
 export { NuWalletAdmin, validatePin, type ApprovalOptions, type LockState } from './pin.js';
-export { BleTransport, type TransportOptions } from './transport.js';
+export { BleTransport, type TransportOptions, type BleTraceEntry } from './transport.js';
 export {
   SERVICE_UUID, RX_UUID, TX_UUID, CMD, EVT, SW, WalletError,
   DEFAULT_PATH, HARDENED, parsePath, encodePath, hex, fromHex, concat,

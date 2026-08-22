@@ -13,6 +13,9 @@
 }
 .back { font: 700 11px monospace; color: #666; text-decoration: none; }
 .back:hover { color: #111513; }
+.links { display: flex; gap: 18px; font: 700 11px monospace; }
+.links a { color: #666; text-decoration: none; }
+.links a:hover { color: #111513; }
 
 .hero { max-width: 1064px; margin: auto; padding: 56px 28px 24px; }
 .kicker {

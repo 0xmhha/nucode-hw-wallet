@@ -50,3 +50,18 @@ next-env.d.ts
 /firmware/zephyr/build/
 /firmware/test/test_crypto
 /firmware/test/test_wallet
+
+# 호스트 테스트 바이너리 (make 로 언제든 다시 만든다)
+/firmware/test/test_crypto
+/firmware/test/test_wallet
+/firmware/test/protocol_bridge
+
+# 펌웨어 빌드 산출물 — 이미 히스토리에 7MB 가량 들어가 있다.
+# .uf2 는 배포용이라 남기고, elf/map/hex/zip 은 언제든 다시 만든다.
+/firmware/nuwallet/build/*
+!/firmware/nuwallet/build/*.uf2
+!/firmware/nuwallet/build/*.UF2
+/firmware/build/*.elf
+/firmware/build/*.map
+/firmware/build/*.zip
+/firmware/build/*.hex

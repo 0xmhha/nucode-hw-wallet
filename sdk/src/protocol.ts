@@ -198,7 +198,7 @@ export const DEFAULT_PATHS: Record<Chain, string> = {
 };
 
 export const TESTNET = {
-  ethereum: { name: 'Sepolia', chainId: 11155111 },
+  ethereum: { name: 'Base Sepolia', chainId: 84532 },
   solana: { name: 'Devnet', cluster: 'devnet' },
 } as const;
 

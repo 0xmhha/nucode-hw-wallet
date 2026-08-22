@@ -23,6 +23,24 @@ export interface ProviderOptions extends ChallengeCallbacks {
 
 type Listener = (...args: any[]) => void;
 
+const sendQueues = new Map<string, Promise<void>>();
+const nextNonces = new Map<string, bigint>();
+
+async function withLocalSendLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = sendQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  sendQueues.set(key, tail);
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+    if (sendQueues.get(key) === tail) sendQueues.delete(key);
+  }
+}
+
 export class NuWalletProvider implements Eip1193Provider {
   private listeners = new Map<string, Set<Listener>>();
   private account: string | null = null;
@@ -70,6 +88,19 @@ export class NuWalletProvider implements Eip1193Provider {
       case 'eth_chainId': return this.hexChainId;
       case 'net_version': return String(this.chainId);
 
+      case 'wallet_switchEthereumChain': {
+        const requested = String((p[0] as { chainId?: string } | undefined)?.chainId ?? '').toLowerCase();
+        if (requested === this.hexChainId.toLowerCase()) return null;
+        throw new ProviderRpcError(4902,
+          `NuWallet provider는 설정된 체인 ${this.hexChainId}만 지원합니다`);
+      }
+
+      case 'wallet_addEthereumChain': {
+        const requested = String((p[0] as { chainId?: string } | undefined)?.chainId ?? '').toLowerCase();
+        if (requested === this.hexChainId.toLowerCase()) return null;
+        throw new ProviderRpcError(4200, '실행 중 체인 추가는 지원하지 않습니다');
+      }
+
       case 'personal_sign': {
         // params: [data, address]  — MetaMask 순서를 따른다
         const data = typeof p[0] === 'string' ? p[0] : hex(p[0]);
@@ -92,12 +123,14 @@ export class NuWalletProvider implements Eip1193Provider {
 
       case 'eth_signTransaction':
       case 'eth_sendTransaction': {
-        const tx = await this.fillTransaction(p[0] ?? {});
-        const unsigned = encodeLegacyUnsigned(tx, this.chainId);
-        const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.chainId, this.cb());
-        const rawTx = encodeLegacySigned(tx, sig.v, fromHex(sig.r), fromHex(sig.s));
-        if (method === 'eth_signTransaction') return hex(rawTx);
-        return await this.rpc('eth_sendRawTransaction', [hex(rawTx)]);
+        const input = p[0] ?? {};
+        if (method === 'eth_signTransaction') {
+          const tx = await this.fillTransaction(input);
+          const unsigned = encodeLegacyUnsigned(tx, this.chainId);
+          const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.chainId, this.cb());
+          return hex(encodeLegacySigned(tx, sig.v, fromHex(sig.r), fromHex(sig.s)));
+        }
+        return await this.sendTransaction(input);
       }
 
       default:
@@ -111,9 +144,39 @@ export class NuWalletProvider implements Eip1193Provider {
 
   private get hexChainId(): string { return '0x' + this.chainId.toString(16); }
 
-  /** 빠진 필드를 노드에서 채운다. */
-  private async fillTransaction(t: any) {
+  private async sendTransaction(input: any): Promise<unknown> {
     const from = this.account ?? await this.wallet.getAddress('ethereum', this.path);
+    const key = `nuwallet:${this.chainId}:${from.toLowerCase()}`;
+    return await withLocalSendLock(key, async () => {
+      const run = async () => {
+        const chainNonce = toBig(await this.rpc('eth_getTransactionCount', [from, 'pending']));
+        const localNonce = nextNonces.get(key) ?? 0n;
+        const nonce = input.nonce ?? (chainNonce > localNonce ? chainNonce : localNonce);
+        const tx = await this.fillTransaction({ ...input, nonce }, from);
+        const unsigned = encodeLegacyUnsigned(tx, this.chainId);
+        const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.chainId, this.cb());
+        const rawTx = encodeLegacySigned(tx, sig.v, fromHex(sig.r), fromHex(sig.s));
+        try {
+          const hash = await this.rpc('eth_sendRawTransaction', [hex(rawTx)]);
+          nextNonces.set(key, tx.nonce + 1n);
+          return hash;
+        } catch (error) {
+          if (/nonce too low/i.test(String((error as Error)?.message))) {
+            const refreshed = toBig(await this.rpc('eth_getTransactionCount', [from, 'pending']));
+            nextNonces.set(key, refreshed);
+          }
+          throw error;
+        }
+      };
+
+      const locks = globalThis.navigator?.locks;
+      return locks ? await locks.request(key, run) : await run();
+    });
+  }
+
+  /** 빠진 필드를 노드에서 채운다. */
+  private async fillTransaction(t: any, knownFrom?: string) {
+    const from = knownFrom ?? this.account ?? await this.wallet.getAddress('ethereum', this.path);
     const nonce = t.nonce ?? await this.rpc('eth_getTransactionCount', [from, 'pending']);
     const gasPrice = t.gasPrice ?? await this.rpc('eth_gasPrice', []);
     const gas = t.gas ?? t.gasLimit ?? await this.rpc('eth_estimateGas', [{ ...t, from }]);
@@ -131,11 +194,21 @@ export class NuWalletProvider implements Eip1193Provider {
     const res = await fetch(this.rpcUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: this.rpcId++, method, params }),
+      body: JSON.stringify(
+        { jsonrpc: '2.0', id: this.rpcId++, method, params },
+        (_key, value) => typeof value === 'bigint' ? `0x${value.toString(16)}` : value,
+      ),
     });
     const j = await res.json() as any;
     if (j.error) throw new Error(`RPC ${method}: ${j.error.message}`);
     return j.result;
+  }
+}
+
+class ProviderRpcError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+    this.name = 'ProviderRpcError';
   }
 }
 

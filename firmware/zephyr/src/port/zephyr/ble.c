@@ -10,6 +10,7 @@
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/logging/log.h>
+#include <errno.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(nu_ble, LOG_LEVEL_INF);
@@ -23,6 +24,20 @@ static nu_wallet      *wallet;
 static nu_reasm        asm_in;
 static bool            notify_on;
 static char            dev_name[24];
+
+/* ── 수신 인박스 ────────────────────────────────────────────────────────────
+ *
+ * GATT write 콜백은 BT RX 스레드에서 돈다. 그 스택은 1KB 남짓인데 지갑 코어는
+ * BIP-32 파생만 해도 ~1.9KB, PBKDF2 까지 가면 ~2.3KB 를 쓴다. 콜백 안에서
+ * 코어를 부르면 스택이 넘쳐 보드가 죽고, 호스트에는 "연결이 끊겼다"로 보인다.
+ * 그래서 여기서는 조립만 하고, 실제 처리는 메인 스레드(8KB)에서 한다.
+ *
+ * 프로토콜은 요청 하나가 끝나야 다음이 나가는 구조라 슬롯은 하나면 된다. */
+static uint8_t   inbox[NU_MAX_MESSAGE];
+static uint16_t  inbox_len;
+static uint16_t  inbox_err;          /* 0 이 아니면 프레이밍 오류 */
+static atomic_t  inbox_full;         /* 1 이면 메인 스레드가 처리해야 한다 */
+K_SEM_DEFINE(rx_sem, 0, 1);
 
 /* ── 송신 ───────────────────────────────────────────────────────────────── */
 
@@ -53,11 +68,23 @@ static ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     const uint8_t *msg = NULL;
     size_t msg_len = 0;
     const int r = nu_reasm_push(&asm_in, buf, len, &msg, &msg_len);
-    if (r < 0) {
-        nu_wallet_framing_error(wallet, (uint16_t)(-r));
-    } else if (r == 1) {
-        nu_wallet_handle(wallet, msg, msg_len);
+    if (r == 0) return len;                     /* 아직 조립 중 */
+
+    /* 앞 요청을 메인 스레드가 아직 처리 중이면 받을 곳이 없다. 호스트가
+     * 직렬화를 어긴 것이므로 ATT 오류로 즉시 알린다 — 조용히 버리면
+     * 타임아웃만 나서 원인을 알 수 없다. */
+    if (!atomic_cas(&inbox_full, 0, 1)) {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
+    if (r < 0) {
+        inbox_err = (uint16_t)(-r);
+        inbox_len = 0;
+    } else {
+        inbox_err = 0;
+        inbox_len = (uint16_t)msg_len;
+        memcpy(inbox, msg, msg_len);
+    }
+    k_sem_give(&rx_sem);                        /* 메인 루프를 즉시 깨운다 */
     return len;
 }
 
@@ -76,11 +103,30 @@ BT_GATT_SERVICE_DEFINE(nu_svc,
                            BT_GATT_PERM_WRITE_ENCRYPT, NULL, on_write, NULL),
 );
 
-/* attrs[1] 은 TX 특성 선언. bt_gatt_notify 는 여기서 값 속성을 찾아간다. */
+/* attrs[1] 은 TX 특성 선언. bt_gatt_notify 는 여기서 값 속성을 찾아간다.
+ *
+ * TX 버퍼는 몇 개 안 되므로 여러 패킷을 연달아 밀어 넣으면 -ENOMEM 이 난다.
+ * 그냥 버리면 호스트 쪽 조립에서 SEQ 가 어긋나 메시지 전체가 깨진다.
+ * 이 함수는 이제 메인 스레드에서만 불리므로 잠깐 자면서 기다려도 안전하다. */
 static void send_packet(const uint8_t *pkt, size_t len, void *ctx) {
     ARG_UNUSED(ctx);
-    const int err = bt_gatt_notify(current, &nu_svc.attrs[1], pkt, len);
-    if (err) LOG_WRN("notify 실패 (%d)", err);
+    for (int i = 0; i < 100; i++) {
+        const int err = bt_gatt_notify(current, &nu_svc.attrs[1], pkt, len);
+        if (err == 0) return;
+        if (err != -ENOMEM) { LOG_WRN("notify 실패 (%d)", err); return; }
+        k_sleep(K_MSEC(2));
+    }
+    LOG_ERR("notify TX 버퍼가 계속 모자랍니다 — 패킷을 버립니다");
+}
+
+/* 메인 루프가 부른다. 조립이 끝난 요청이 있으면 코어에 넘긴다.
+ * 코어는 여기서, 즉 메인 스레드 스택에서 실행된다. */
+void nu_ble_rx_poll(int timeout_ms) {
+    if (k_sem_take(&rx_sem, K_MSEC(timeout_ms)) != 0) return;
+    if (inbox_err) nu_wallet_framing_error(wallet, inbox_err);
+    else           nu_wallet_handle(wallet, inbox, inbox_len);
+    /* 응답을 다 내보낸 뒤에 슬롯을 연다. */
+    atomic_clear(&inbox_full);
 }
 
 /* ── 연결 ───────────────────────────────────────────────────────────────── */
@@ -100,6 +146,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
     if (current) { bt_conn_unref(current); current = NULL; }
     notify_on = false;
     nu_reasm_init(&asm_in);
+    atomic_clear(&inbox_full);
+    k_sem_reset(&rx_sem);
     nu_wallet_disconnected(wallet);   /* 진행 중 요청 폐기 + 재잠금 */
     ARG_UNUSED(conn);
 }
