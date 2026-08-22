@@ -13,11 +13,12 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { NuWallet, NuWalletProvider, WalletError } from '@/sdk/src/index';
 import s from './dapp.module.css';
+import { WebAppFooter } from '../components/WebAppFooter';
 
 /* 체인 프리셋. RPC 는 사용자가 직접 넣게 둔다 — 공개 엔드포인트를 코드에
  * 박아 두면 금방 죽고, 데모용 키를 넣어 두면 그게 곧 유출이다. */
 const PRESETS = [
-  { name: 'Sepolia 테스트넷', chainId: 11155111, rpc: 'https://ethereum-sepolia-rpc.publicnode.com', symbol: 'ETH' },
+  { name: 'Base Sepolia 테스트넷', chainId: 84532, rpc: 'https://sepolia.base.org', symbol: 'ETH' },
   { name: 'Holesky 테스트넷', chainId: 17000, rpc: 'https://ethereum-holesky-rpc.publicnode.com', symbol: 'ETH' },
   { name: '로컬 노드 (anvil/hardhat)', chainId: 31337, rpc: 'http://127.0.0.1:8545', symbol: 'ETH' },
   { name: 'Ethereum 메인넷', chainId: 1, rpc: '', symbol: 'ETH' },
@@ -39,7 +40,7 @@ export default function DappDemo() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('보드를 연결하고 체인을 고르세요.');
 
-  const [to, setTo] = useState('');
+  const [to, setTo] = useState('0x3FFd98B1f972043a824F05E6821e793B26c72794');
   const [value, setValue] = useState('0.001');
   const [data, setData] = useState('');
   const [message, setMessage] = useState('NuWallet 로 서명한 메시지');
@@ -62,7 +63,7 @@ export default function DappDemo() {
       path,
       onStart: (i) => {
         setApproval({ steps: i.steps, done: 0 });
-        setStatus(`보드가 LED 로 ${i.steps}자리 시퀀스를 보여줍니다. 그대로 누르세요.`);
+        setStatus('보드의 버튼을 1 → 2 → 3 → 4 순서로 누르세요.');
       },
       onProgress: (i) => setApproval((a) => (a ? { ...a, done: i.step } : a)),
     });
@@ -135,8 +136,23 @@ export default function DappDemo() {
   });
 
   const send = () => run('eth_sendTransaction', async () => {
-    const hash = await providerOrThrow().request({
-      method: 'eth_sendTransaction', params: [txParams()],
+    const p = providerOrThrow();
+    const tx = txParams();
+    const [balanceHex, gasPriceHex] = await Promise.all([
+      p.request({ method: 'eth_getBalance', params: [account, 'pending'] }) as Promise<string>,
+      p.request({ method: 'eth_gasPrice', params: [] }) as Promise<string>,
+    ]);
+    const available = BigInt(balanceHex);
+    const gasPrice = BigInt(gasPriceHex);
+    const gasLimit = BigInt(tx.gas ?? '0x5208');
+    const required = BigInt(tx.value) + gasLimit * gasPrice;
+    if (available < required) {
+      throw new Error(
+        `Base Sepolia 잔액 부족: 보유 ${formatEther(available)} ETH, ` +
+        `필요 ${formatEther(required)} ETH (전송액 + 예상 수수료)`);
+    }
+    const hash = await p.request({
+      method: 'eth_sendTransaction', params: [tx],
     }) as string;
     say('in', `트랜잭션 해시 ${hash}`);
     setStatus(`전송됨 — ${hash}`);
@@ -159,11 +175,34 @@ export default function DappDemo() {
   }
 
   function txParams() {
+    validateTransactionInputs();
     const t: Record<string, string> = { from: account };
     if (to.trim()) t.to = to.trim();
     if (data.trim()) t.data = data.trim();
     t.value = '0x' + parseEther(value).toString(16);
+    // 단순 ETH 전송은 gas를 고정해 잔액이 없는 계정에서도
+    // eth_signTransaction 자체를 테스트할 수 있게 한다.
+    if (!data.trim()) t.gas = '0x5208';
     return t;
+  }
+
+  function validateTransactionInputs() {
+    if (!Number.isSafeInteger(Number(chainId)) || Number(chainId) <= 0) {
+      throw new Error('chainId는 0보다 큰 정수여야 합니다.');
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/u.test(account)) {
+      throw new Error('발신 주소 형식이 올바르지 않습니다.');
+    }
+    if (to.trim() && !/^0x[0-9a-fA-F]{40}$/u.test(to.trim())) {
+      throw new Error('받는 주소는 0x로 시작하는 20바이트 Ethereum 주소여야 합니다.');
+    }
+    if (!to.trim() && !data.trim()) {
+      throw new Error('받는 주소가 없으면 컨트랙트 생성 bytecode가 DATA에 필요합니다.');
+    }
+    if (data.trim() && !/^0x(?:[0-9a-fA-F]{2})*$/u.test(data.trim())) {
+      throw new Error('DATA는 0x로 시작하는 짝수 길이의 HEX여야 합니다.');
+    }
+    if (parseEther(value) < 0n) throw new Error('전송액은 0 이상이어야 합니다.');
   }
 
   const preset = PRESETS[presetIdx]!;
@@ -175,7 +214,7 @@ export default function DappDemo() {
           <span className={s.mark}>NU</span>
           <span>NuWallet 예제 DApp</span>
         </div>
-        <Link href="/" className={s.back}>← 기기 설정으로</Link>
+        <div className={s.links}><Link href="/">지갑</Link><Link href="/setup">설정</Link><Link href="/dapp">트랜잭션 테스트</Link><Link href="/debug">BLE 디버그</Link></div>
       </nav>
 
       <header className={s.hero}>
@@ -255,7 +294,8 @@ export default function DappDemo() {
         <section className={s.card}>
           <h2>3. 트랜잭션 전송</h2>
           <p className={s.hint}>
-            nonce · gasPrice · gas 는 비워 두면 RPC 에서 채웁니다.
+            nonce와 gasPrice는 RPC에서 조회하고, 단순 ETH 전송은 gas 21,000을 사용합니다.
+            전송 전에 주소·데이터·chainId와 잔액을 검증합니다.
             서명 대상은 <code>RLP([nonce,gasPrice,gas,to,value,data,chainId,0,0])</code> 원문이고,
             <strong> 해시는 보드가 직접 계산</strong>합니다.
           </p>
@@ -315,6 +355,7 @@ export default function DappDemo() {
         <span className={`${s.led} ${account ? s.online : ''}`} />
         <strong>{status}</strong>
       </aside>
+      <WebAppFooter />
     </main>
   );
 }

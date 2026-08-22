@@ -32,19 +32,21 @@ src/main.c        HAL·BLE 를 올리고 10ms 주기로 코어를 틱 시키는 
 
 ## 빌드
 
+> ⚠️ **NU-40 DK 용 Zephyr 보드 정의가 아직 없다.** 벤더는 Arduino 코어만
+> 제공하고, `nucode_nu40` 은 Zephyr 업스트림에도 없다. 따라서 아래 명령은
+> 보드를 직접 정의하기 전까지 동작하지 않는다. 필요한 값(핀 배치·플래시 배치)은
+> `docs/nu40-dk-firmware-installation.md` 에 정리해 두었다.
+
 ```sh
-west build -b nucode_nu40/nrf52840 firmware/zephyr
+west build -b <직접 정의한 보드> firmware/zephyr
 west flash
-```
-
-보드 정의가 없으면 nRF52840 DK 로도 그대로 올라간다.
-
-```sh
-west build -b nrf52840dk/nrf52840 firmware/zephyr
 ```
 
 devicetree 에 `led0..led3`, `sw0..sw3` 별칭이 있어야 한다. 없는 것은 부팅 시
 경고만 내고 그 버튼·LED 만 동작하지 않는다.
+
+지갑 로직 자체는 플랫폼에 묶여 있지 않다 (`src/app/`). 보드에 올리는 것이
+급하면 `src/port/` 에 Arduino HAL 을 하나 더 붙이는 편이 빠르다.
 
 ## 테스트 (보드 불필요)
 

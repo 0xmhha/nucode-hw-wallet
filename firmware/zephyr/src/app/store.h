@@ -11,6 +11,14 @@
  *   8..23   SALT        16
  *   24..55  MAC         32   HMAC-SHA256(kmac, raw[0..24) ‖ CT)
  *   56..    CT          WORD_COUNT*2   워드 인덱스 big-endian u16 배열 XOR 키스트림
+ *   맨끝     TRIES       1   남은 PIN 시도 횟수. **MAC 밖이다.**
+ *
+ * TRIES 가 MAC 밖에 있는 이유: 틀린 PIN 으로 시도했을 때도 카운터를 줄여
+ * 저장해야 하는데, MAC 을 다시 계산하려면 올바른 PIN 이 필요하다. MAC 밖이라
+ * 플래시를 만질 수 있는 공격자는 카운터를 되돌릴 수 있지만, 그런 공격자는
+ * 어차피 CT 와 SALT 를 그대로 떠 가서 오프라인으로 PIN 을 깰 수 있다.
+ * 이 바이트가 막는 것은 "보드를 주웠고 버튼만 누를 수 있는" 공격자다.
+ * 예전에는 카운터가 RAM 에만 있어서 전원만 껐다 켜면 무한히 시도할 수 있었다.
  *
  * 키 유도
  *   K     = PBKDF2-HMAC-SHA512(PIN, SALT, 4096)   64바이트
@@ -39,12 +47,30 @@ extern "C" {
 #define NU_STORE_OFF_CT   56
 #define NU_STORE_MIN_LEN  (NU_STORE_OFF_CT + 12 * 2)
 
+/* TRIES 바이트의 위치. 이 바이트가 없는 옛 레코드도 유효하게 받아들인다. */
+static inline size_t nu_store_body_len(const uint8_t *raw) {
+    return (size_t)NU_STORE_OFF_CT + (size_t)raw[7] * 2u;
+}
+
 /* 레코드가 형식상 유효한지. 유효하면 1. */
 int nu_store_valid(const uint8_t *raw, size_t len);
 
 static inline int      nu_store_has_pin(const uint8_t *raw)    { return raw[5] & 1; }
 static inline uint8_t  nu_store_pin_len(const uint8_t *raw)    { return raw[6]; }
 static inline uint8_t  nu_store_word_count(const uint8_t *raw) { return raw[7]; }
+
+/* 남은 PIN 시도 횟수. TRIES 바이트가 없는 옛 레코드는 만수로 본다. */
+static inline uint8_t nu_store_tries(const uint8_t *raw, size_t len) {
+    const size_t off = nu_store_body_len(raw);
+    return (len > off) ? raw[off] : (uint8_t)NU_PIN_ATTEMPTS;
+}
+
+/* 남은 횟수를 고쳐 쓴다. 레코드 길이를 돌려준다 (바이트가 없었으면 1 늘어난다). */
+static inline size_t nu_store_set_tries(uint8_t *raw, size_t len, uint8_t tries) {
+    const size_t off = nu_store_body_len(raw);
+    raw[off] = tries;
+    return (len > off) ? len : off + 1u;
+}
 
 /* PIN 으로 열어 워드 인덱스를 꺼낸다. MAC 이 맞아야 1, 틀리면 0 (= PIN 오류). */
 int nu_store_open(const uint8_t *raw, size_t len,

@@ -70,6 +70,19 @@ export class NuWalletProvider implements Eip1193Provider {
       case 'eth_chainId': return this.hexChainId;
       case 'net_version': return String(this.chainId);
 
+      case 'wallet_switchEthereumChain': {
+        const requested = String((p[0] as { chainId?: string } | undefined)?.chainId ?? '').toLowerCase();
+        if (requested === this.hexChainId.toLowerCase()) return null;
+        throw new ProviderRpcError(4902,
+          `NuWallet provider는 설정된 체인 ${this.hexChainId}만 지원합니다`);
+      }
+
+      case 'wallet_addEthereumChain': {
+        const requested = String((p[0] as { chainId?: string } | undefined)?.chainId ?? '').toLowerCase();
+        if (requested === this.hexChainId.toLowerCase()) return null;
+        throw new ProviderRpcError(4200, '실행 중 체인 추가는 지원하지 않습니다');
+      }
+
       case 'personal_sign': {
         // params: [data, address]  — MetaMask 순서를 따른다
         const data = typeof p[0] === 'string' ? p[0] : hex(p[0]);
@@ -136,6 +149,13 @@ export class NuWalletProvider implements Eip1193Provider {
     const j = await res.json() as any;
     if (j.error) throw new Error(`RPC ${method}: ${j.error.message}`);
     return j.result;
+  }
+}
+
+class ProviderRpcError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+    this.name = 'ProviderRpcError';
   }
 }
 

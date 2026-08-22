@@ -97,7 +97,7 @@ int nu_store_seal(const nu_hal *hal,
     const size_t ct_len = (size_t)count * 2;
     const size_t total = NU_STORE_OFF_CT + ct_len;
 
-    memset(raw_out, 0, total);
+    memset(raw_out, 0, total + 1);
     raw_out[0] = NU_STORE_MAGIC0; raw_out[1] = NU_STORE_MAGIC1;
     raw_out[2] = NU_STORE_MAGIC2; raw_out[3] = NU_STORE_MAGIC3;
     raw_out[4] = NU_STORE_VERSION;
@@ -117,6 +117,9 @@ int nu_store_seal(const nu_hal *hal,
     mac_of(kmac, raw_out, ct_len, raw_out + NU_STORE_OFF_MAC);
     memset(kenc, 0, 32); memset(kmac, 0, 32);
 
-    *raw_len_out = total;
+    /* 새 레코드는 시도 횟수가 만수다. MAC 밖이라 나중에 이 바이트만 고쳐 쓴다. */
+    raw_out[total] = NU_PIN_ATTEMPTS;
+
+    *raw_len_out = total + 1;
     return 1;
 }

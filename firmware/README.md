@@ -7,7 +7,7 @@ NU-40 DK (nRF52840) 를 BLE 하드웨어 지갑으로 만드는 펌웨어.
 
 | | 위치 | 빌드 |
 |---|---|---|
-| 펌웨어 (Zephyr) | `zephyr/` | `west build -b nucode_nu40/nrf52840 firmware/zephyr` |
+| 펌웨어 (Zephyr) | `zephyr/` | ⚠️ 보드 정의 필요 — 아래 참고 |
 | 공유 라이브러리 | `nuwallet/src/` | 위 빌드와 호스트 테스트가 함께 컴파일 |
 
 `nuwallet/src/` 에는 보드용 코드가 없다. 암호 스택(`crypto/`, `micro-ecc/`)과
@@ -15,7 +15,15 @@ NU-40 DK (nRF52840) 를 BLE 하드웨어 지갑으로 만드는 펌웨어.
 상대 경로로 직접 참조한다. SHA-2 · HMAC · PBKDF2 · Keccak-256 · BIP-39 · BIP-32 ·
 SLIP-0010 · secp256k1(RFC 6979) 을 직접 구현했고 전부 공식 테스트 벡터로 검증한다.
 
-설치는 `docs/nu40-dk-firmware-installation.md` 참고 (UF2 복사 또는 `west flash`).
+## 보드에 올리기
+
+설치 자체는 UF2 복사로 끝난다 — RESET 두 번 → `NRF52BOOT` 드라이브에 `.uf2` 복사.
+자세한 절차와 `.uf2` 만드는 법은 `docs/nu40-dk-firmware-installation.md` 를 본다.
+
+**다만 지금 이 저장소의 Zephyr 앱은 바로 빌드되지 않는다.** 벤더(nucode)가
+제공하는 것은 `arduino-cli` 코어 하나뿐이고, `nucode_nu40` Zephyr 보드 정의는
+저장소에도 Zephyr 업스트림에도 없다. 보드 정의를 직접 쓰거나, 지갑 코어
+(`zephyr/src/app/` — 플랫폼 독립 순수 C)를 Arduino 위에 올려야 한다.
 
 ## 보드 없이 테스트
 

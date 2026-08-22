@@ -17,7 +17,16 @@ export interface TransportOptions {
   timeoutMs?: number;
 }
 
+export interface BleTraceEntry {
+  timestamp: number;
+  direction: 'tx' | 'rx' | 'system' | 'error';
+  layer: 'gatt' | 'packet' | 'message';
+  label: string;
+  data?: string;
+}
+
 type EventHandler = (e: DeviceEvent) => void;
+type TraceHandler = (entry: BleTraceEntry) => void;
 
 export class BleTransport {
   private device: BluetoothDevice | null = null;
@@ -29,6 +38,7 @@ export class BleTransport {
   private queue: Promise<unknown> = Promise.resolve();
   private handlers = new Set<EventHandler>();
   private disconnectHandlers = new Set<() => void>();
+  private traceHandlers = new Set<TraceHandler>();
 
   /* 리스너는 한 번만 만들어 두고 붙였다 뗀다. connect() 마다 새 익명 함수를
    * 붙이면 removeEventListener 로 뗄 수가 없다. Web Bluetooth 는 같은 기기에
@@ -76,12 +86,14 @@ export class BleTransport {
     // 멈추므로, 다시 띄워 봐야 목록이 비어 있어 사용자만 헷갈린다.
     if (this.isConnected) return;
 
+    this.trace('system', 'gatt', '기기 선택 요청');
     let dev: BluetoothDevice;
     try {
       dev = await navigator.bluetooth.requestDevice({
         filters: [{ services: [SERVICE_UUID] }],
         optionalServices: [SERVICE_UUID],
       });
+      this.trace('system', 'gatt', `기기 선택: ${dev.name || '(이름 없음)'}`);
     } catch (e) {
       throw chooserError(e);
     }
@@ -100,6 +112,7 @@ export class BleTransport {
       this.rx = rx;
       this.tx = tx;
       this.asm.reset();
+      this.trace('system', 'gatt', 'GATT 연결 및 알림 구독 완료');
     } catch (e) {
       /* 중간에 실패했으면 링크를 반드시 닫는다.
        * 열어 둔 채로 두면 보드는 "연결됨" 상태라 광고를 멈추고, 다음에 다시
@@ -109,6 +122,7 @@ export class BleTransport {
       this.detach(dev);
       this.device = null;
       this.rx = this.tx = null;
+      this.trace('error', 'gatt', '연결 실패', messageOf(e, 'GATT 오류'));
       throw connectError(e);
     }
   }
@@ -134,6 +148,11 @@ export class BleTransport {
     return () => this.disconnectHandlers.delete(h);
   }
 
+  onTrace(h: TraceHandler): () => void {
+    this.traceHandlers.add(h);
+    return () => this.traceHandlers.delete(h);
+  }
+
   /**
    * 명령 하나를 보내고 응답을 기다린다.
    * BLE 는 요청/응답을 짝지어주지 않으므로 직렬화한다 — 동시에 하나만 in-flight.
@@ -145,6 +164,7 @@ export class BleTransport {
       }
       const msg = encodeRequest(cmd, payload);
       const packets = frame(TAG.MESSAGE, msg, this.mtu);
+      this.trace('tx', 'message', `CMD 0x${cmd.toString(16).padStart(2, '0')}`, toHex(msg));
 
       const result = new Promise<Response>((resolve, reject) => {
         this.pending = resolve;
@@ -160,6 +180,7 @@ export class BleTransport {
           // TS 5.7 부터 Uint8Array 가 버퍼 타입에 대해 제네릭이라 BufferSource 로
           // 바로 안 받아준다. frame() 이 만드는 건 항상 ArrayBuffer 기반이다.
           const buf = packets[i] as unknown as BufferSource;
+          this.trace('tx', 'packet', `패킷 ${i + 1}/${packets.length}`, toHex(packets[i]!));
 
           /* 첫 패킷만 응답 있는 쓰기로 보낸다.
            *
@@ -187,6 +208,7 @@ export class BleTransport {
   }
 
   private onPacket(pkt: Uint8Array) {
+    this.trace('rx', 'packet', '알림 패킷', toHex(pkt));
     let asm;
     try {
       asm = this.asm.push(pkt);
@@ -196,6 +218,8 @@ export class BleTransport {
       return;
     }
     if (!asm) return;
+
+    this.trace('rx', 'message', asm.tag === TAG.EVENT ? 'EVENT' : 'RESPONSE', toHex(asm.payload));
 
     if (asm.tag === TAG.EVENT) {
       const e = decodeEvent(asm.payload);
@@ -216,7 +240,14 @@ export class BleTransport {
     this.asm.reset();
     this.pendingReject?.(new WalletError(SW.DEVICE_ERROR, '기기 연결이 끊겼습니다'));
     this.pending = this.pendingReject = null;
+    this.trace('system', 'gatt', '연결 해제');
     for (const h of this.disconnectHandlers) { try { h(); } catch { /* noop */ } }
+  }
+
+  private trace(direction: BleTraceEntry['direction'], layer: BleTraceEntry['layer'],
+                label: string, data?: string) {
+    const entry: BleTraceEntry = { timestamp: Date.now(), direction, layer, label, data };
+    for (const h of this.traceHandlers) { try { h(entry); } catch { /* 디버거가 전송을 막으면 안 된다 */ } }
   }
 }
 
@@ -289,4 +320,8 @@ function writeError(e: unknown): WalletError {
 function messageOf(e: unknown, fallback: string): string {
   const m = e instanceof Error ? e.message : '';
   return m ? `${fallback}: ${m}` : fallback;
+}
+
+function toHex(data: Uint8Array): string {
+  return Array.from(data, (b) => b.toString(16).padStart(2, '0')).join('');
 }

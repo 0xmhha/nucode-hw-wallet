@@ -3,8 +3,11 @@
 #include "nrf_cc310/include/crys_ec_edw_api.h"
 #include <string.h>
 
+/* CryptoCell 작업 버퍼는 BLE/Arduino 태스크 스택에 두기엔 크다. 동시에 하나의
+ * 지갑 명령만 처리하므로 정적 버퍼 하나를 공유한다. */
+static CRYS_ECEDW_TempBuff_t temp;
+
 static int seed_keypair(const uint8_t seed[32], uint8_t secret[64], uint8_t pub[32]) {
-    CRYS_ECEDW_TempBuff_t temp;
     size_t secret_len = 64;
     size_t pub_len = 32;
     memset(&temp, 0, sizeof temp);
@@ -25,7 +28,6 @@ int solana_sign(const uint8_t seed[32], const uint8_t *message, size_t message_l
                 uint8_t signature[64]) {
     uint8_t secret[64], pub[32];
     if (!message || !seed_keypair(seed, secret, pub)) return 0;
-    CRYS_ECEDW_TempBuff_t temp;
     size_t sig_len = 64;
     memset(&temp, 0, sizeof temp);
     const CRYSError_t rc = CRYS_ECEDW_Sign(
