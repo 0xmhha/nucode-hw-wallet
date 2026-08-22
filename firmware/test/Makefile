@@ -7,7 +7,7 @@ CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter \
           -DuECC_PLATFORM=uECC_arch_other -I../nuwallet/src
 
 SHARED = ../nuwallet/src
-ZSRC   = ../zephyr/src
+ZSRC   = ../wallet/src
 
 # 파일을 나열하지 않고 훑는다 — 암호 스택은 계속 늘어나는 중이라
 # 하나 추가할 때마다 Makefile 을 고치게 하지 않는다.

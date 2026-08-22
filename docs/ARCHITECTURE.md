@@ -18,7 +18,7 @@
 
 | 요구 | 위치 | 상태 |
 |---|---|---|
-| 1. nucode 지원 펌웨어 | `firmware/zephyr` (Zephyr) | 아래 참고 |
+| 1. nucode 지원 펌웨어 | `firmware/wallet` (Zephyr) | 아래 참고 |
 | 2. Bluetooth SDK | `sdk/` | `@nucode/hw-wallet` |
 | 3. 펌웨어 설정 웹 | `app/` (생성), `app/setup` (가져오기·PIN·잠금·초기화) | |
 | 4. 예제 DApp | `app/dapp` | |
@@ -42,7 +42,7 @@ firmware/
     src/crypto/        SHA-2 · HMAC · PBKDF2 · Keccak-256 · BIP-39 · BIP-32
     src/micro-ecc/     secp256k1. recovery id 를 꺼내려고 패치했다
     src/chains/        체인별 해시 헬퍼
-  zephyr/            Zephyr 앱  →  firmware/zephyr/README.md
+  wallet/            지갑 펌웨어  →  firmware/wallet/README.md
     src/app/           플랫폼 독립 코어. 책임별로 나뉜다 —
                        wire(송신) · session(시드) · challenge(승인) · commands(프로토콜)
     src/port/zephyr/   BLE GATT · GPIO · NVS · CSPRNG

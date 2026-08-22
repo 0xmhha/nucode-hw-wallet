@@ -23,8 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../zephyr/src/app/wallet.h"
-#include "../zephyr/src/port/host/hal_host.h"
+#include "../wallet/src/app/wallet.h"
+#include "../wallet/src/port/host/hal_host.h"
 
 static nu_host   H;
 static nu_hal    HAL;

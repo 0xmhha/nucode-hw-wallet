@@ -23,9 +23,9 @@ const args = new Set(process.argv.slice(2));
 /* ── 계층 정의 ───────────────────────────────────────────────────────────
    위에서부터 순서대로 매칭한다. 아래 화살표는 "이 계층이 의존해도 되는 곳". */
 const LAYERS = [
-  { id: 'fw.core',    match: /^firmware\/zephyr\/src\/app\//,            may: ['fw.core', 'fw.crypto'] },
-  { id: 'fw.port',    match: /^firmware\/zephyr\/src\/port\//,           may: ['fw.port', 'fw.core', 'fw.crypto'] },
-  { id: 'fw.entry',   match: /^firmware\/zephyr\/src\/main\.c$/,         may: ['fw.core', 'fw.port'] },
+  { id: 'fw.core',    match: /^firmware\/wallet\/src\/app\//,            may: ['fw.core', 'fw.crypto'] },
+  { id: 'fw.port',    match: /^firmware\/wallet\/src\/port\//,           may: ['fw.port', 'fw.core', 'fw.crypto'] },
+  { id: 'fw.entry',   match: /^firmware\/wallet\/src\/main\.c$/,         may: ['fw.core', 'fw.port'] },
   { id: 'fw.crypto',  match: /^firmware\/nuwallet\/src\/(crypto|micro-ecc)\//, may: ['fw.crypto'] },
   { id: 'fw.chains',  match: /^firmware\/nuwallet\/src\/chains\//,       may: ['fw.chains', 'fw.crypto'] },
   { id: 'fw.arduino', match: /^firmware\/nuwallet\/(nuwallet\.ino|config\.h|src\/(controller|storage|transport|ui)\/)/,

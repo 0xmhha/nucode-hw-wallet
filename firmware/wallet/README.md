@@ -48,7 +48,7 @@ src/main.c        HAL·BLE 를 올리고 10ms 주기로 코어를 틱 시키는 
 > `docs/nu40-dk-firmware-installation.md` 에 정리해 두었다.
 
 ```sh
-west build -b <직접 정의한 보드> firmware/zephyr
+west build -b <직접 정의한 보드> firmware/wallet
 west flash
 ```
 

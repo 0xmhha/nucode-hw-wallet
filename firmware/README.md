@@ -48,7 +48,7 @@ cd firmware/test && make test
 
 `arduino/nu40_pet/` 와 `src/main.c` 는 이전 NU-40 PET(다마고치) 데모다.
 지갑과 무관하며, `CMakeLists.txt` / `prj.conf` 도 그쪽 것이다.
-지갑 Zephyr 앱을 빌드할 때는 `firmware` 가 아니라 **`firmware/zephyr`** 를
+지갑 Zephyr 앱을 빌드할 때는 `firmware` 가 아니라 **`firmware/wallet`** 를
 가리켜야 한다.
 
 ## 브라우저

@@ -20,12 +20,12 @@
 **조용히 틀리는 종류라 제일 위험하다.** 주소는 정상으로 보이는데 서명만 어긋난다.
 
 → 선택지 둘. `docs/nu40-dk-firmware-installation.md` 참고.
-  - **(권장)** Arduino 컨트롤러를 지우고, 검증된 코어(`firmware/zephyr/src/app/`,
+  - **(권장)** Arduino 컨트롤러를 지우고, 검증된 코어(`firmware/wallet/src/app/`,
     플랫폼 독립 순수 C)에 `port/arduino/` HAL 다섯 함수만 붙인다
   - 또는 컨트롤러에 위 세 가지를 반영하고 전용 브리지로 적합성 16개를 통과시킨다
 
 ### T2. 펌웨어가 둘인데 검증은 하나만 받았다
-`firmware/zephyr/` (검증됨) vs `firmware/nuwallet/src/controller/` (미검증)
+`firmware/wallet/` (검증됨) vs `firmware/nuwallet/src/controller/` (미검증)
 
 같은 프로토콜을 두 번 구현했다. `scripts/check-protocol.py` 와
 `sdk/test/conformance.test.js` 는 Zephyr 코어만 본다. T1 과 함께 해소한다.
@@ -33,7 +33,7 @@
 ### T3. Solana 를 SDK 는 지원하는데 펌웨어는 못 한다
 - `sdk/src/solana.ts` — 어댑터 있음
 - `firmware/nuwallet/src/crypto/slip10.c` — SLIP-0010 있음. **Zephyr 코어에 연결 안 됨**
-- `firmware/zephyr/src/app/wallet.c` — `0x33 SIGN_SOLANA` 는 `UNSUPPORTED_CHAIN` 반환
+- `firmware/wallet/src/app/wallet.c` — `0x33 SIGN_SOLANA` 는 `UNSUPPORTED_CHAIN` 반환
 
 지금은 정직하게 실패한다(웹도 `ready: false` 로 막아 둠). 지원하려면
 ed25519 서명 + `0x21` 의 `CHAIN=0x02` 경로를 코어에 붙여야 한다.

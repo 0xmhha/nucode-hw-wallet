@@ -8,11 +8,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../zephyr/src/app/wallet.h"
-#include "../zephyr/src/app/framing.h"
-#include "../zephyr/src/app/rlp.h"
-#include "../zephyr/src/app/store.h"
-#include "../zephyr/src/port/host/hal_host.h"
+#include "../wallet/src/app/wallet.h"
+#include "../wallet/src/app/framing.h"
+#include "../wallet/src/app/rlp.h"
+#include "../wallet/src/app/store.h"
+#include "../wallet/src/port/host/hal_host.h"
 #include "../nuwallet/src/crypto/keccak.h"
 #include "../nuwallet/src/crypto/bip32.h"
 #include "../nuwallet/src/crypto/ecdsa.h"
