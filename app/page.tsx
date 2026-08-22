@@ -1,78 +1,29 @@
 'use client';
+import { useMemo, useState } from 'react';
+import { BleTransport, NuWallet, hex, type Chain } from '@/sdk/src/index';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-
-const SERVICE_UUID = '7d2a0001-7b7a-4f45-8d68-36f1a4d9c101';
-const BOARD_TO_WEB_UUID = '7d2a0002-7b7a-4f45-8d68-36f1a4d9c101';
-const WEB_TO_BOARD_UUID = '7d2a0003-7b7a-4f45-8d68-36f1a4d9c101';
-type Mood = 'happy' | 'okay' | 'hungry';
-type Char = { startNotifications(): Promise<Char>; addEventListener(type: string, listener: EventListener): void; writeValue(value: BufferSource): Promise<void> };
-type Device = { name?: string; gatt?: { connect(): Promise<{ getPrimaryService(uuid: string): Promise<{ getCharacteristic(uuid: string): Promise<Char> }> }> }; addEventListener(type: string, listener: EventListener): void };
-const moodInfo = {
-  happy: { label: '아주 신나요!', note: '배가 든든해요', color: '#b7ef5b', interval: 1400, speed: '천천히' },
-  okay: { label: '기분이 괜찮아요', note: '조금 출출해요', color: '#ffd658', interval: 760, speed: '보통으로' },
-  hungry: { label: '배가 고파요!', note: '버튼을 눌러 밥을 주세요', color: '#ff7164', interval: 260, speed: '빠르게' },
-} satisfies Record<Mood, { label: string; note: string; color: string; interval: number; speed: string }>;
-const getMood = (hunger: number): Mood => hunger >= 65 ? 'happy' : hunger >= 30 ? 'okay' : 'hungry';
+const CHAINS: Array<{ id: Chain; name: string; curve: string; path: string; tone: string }> = [
+  { id: 'ethereum', name: 'Ethereum', curve: 'secp256k1 · ECDSA', path: "m/44'/60'/0'/0/0", tone: '#6574c4' },
+  { id: 'solana', name: 'Solana', curve: 'Ed25519 · SLIP-0010', path: "m/44'/501'/0'/0'", tone: '#14f195' },
+];
 
 export default function Home() {
-  const [hunger, setHunger] = useState(42);
-  const [connected, setConnected] = useState(false);
-  const [deviceName, setDeviceName] = useState('NU-40 DK');
-  const [connecting, setConnecting] = useState(false);
-  const [message, setMessage] = useState('보드의 버튼을 누르면 밥을 먹어요');
-  const [feedPulse, setFeedPulse] = useState(0);
-  const txRef = useRef<Char | null>(null);
-  const lastMood = useRef<Mood | null>(null);
-  const mood = getMood(hunger);
-  const info = moodInfo[mood];
+  const wallet = useMemo(() => new NuWallet(), []);
+  const [connected, setConnected] = useState(false), [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('보드를 연결해 설정을 시작하세요.');
+  const [words, setWords] = useState<number[] | null>(null);
+  const [addresses, setAddresses] = useState<Partial<Record<Chain, string>>>({});
+  const [signatures, setSignatures] = useState<Partial<Record<Chain, string>>>({});
+  async function run(task: () => Promise<void>) { setBusy(true); try { await task(); } catch (e) { setStatus(e instanceof Error ? e.message : '요청 실패'); } finally { setBusy(false); } }
+  const connect = () => run(async () => { if (!BleTransport.isSupported) throw new Error('Chrome 또는 Edge의 HTTPS 페이지에서 열어주세요.'); await wallet.connect(); setConnected(true); setStatus(`${wallet.transport.deviceName || 'NuWallet'} 연결됨`); });
+  const generate = () => run(async () => { setWords(await wallet.generate(256)); setStatus('복구 단어 인덱스를 오프라인 워드리스트와 대조해 백업한 뒤 확정하세요.'); });
+  const confirm = () => run(async () => { if (!words) return; await wallet.confirm(words); setWords(null); setStatus('지갑이 보드에 저장됐습니다.'); });
+  const loadAddress = (chain: Chain) => run(async () => { const address = await wallet.address(chain); setAddresses(v => ({ ...v, [chain]: address })); setStatus(`${chain} 주소를 보드에서 파생했습니다.`); });
+  const signTest = (chain: Chain) => run(async () => { const msg = new TextEncoder().encode(`NuWallet ${chain} setup verification`); const pending = chain === 'ethereum' ? await wallet.signEthereum(msg) : await wallet.signSolana(msg); setStatus(`요청 ${pending.requestId}: LED 순서대로 버튼을 눌러 승인하세요.`); const sig = await pending.signature; setSignatures(v => ({ ...v, [chain]: hex(sig) })); setStatus('보드 내부 서명이 완료됐습니다.'); });
 
-  const feed = useCallback(() => {
-    setHunger((value) => Math.min(100, value + 28));
-    setMessage('냠냠! 맛있게 먹었어요');
-    setFeedPulse((value) => value + 1);
-    window.setTimeout(() => setMessage('보드의 버튼을 누르면 밥을 먹어요'), 1800);
-  }, []);
-
-  useEffect(() => { const timer = window.setInterval(() => setHunger((v) => Math.max(0, v - 1)), 6000); return () => clearInterval(timer); }, []);
-  useEffect(() => {
-    if (!connected || !txRef.current || lastMood.current === mood) return;
-    lastMood.current = mood;
-    const payload = JSON.stringify({ type: 'mood', mood, blinkMs: info.interval, color: info.color }) + '\n';
-    txRef.current.writeValue(new TextEncoder().encode(payload)).catch(() => setMessage('LED 명령을 보내지 못했어요'));
-  }, [connected, info.color, info.interval, mood]);
-
-  async function connect() {
-    const nav = navigator as Navigator & { bluetooth?: { requestDevice(options: unknown): Promise<Device> } };
-    if (!nav.bluetooth) { setMessage('Chrome 또는 Edge에서 HTTPS로 열어주세요'); return; }
-    setConnecting(true);
-    try {
-      const device = await nav.bluetooth.requestDevice({ filters: [{ namePrefix: 'NU-40' }], optionalServices: [SERVICE_UUID] });
-      const server = await device.gatt?.connect();
-      if (!server) throw new Error('GATT unavailable');
-      const service = await server.getPrimaryService(SERVICE_UUID);
-      const rx = await service.getCharacteristic(BOARD_TO_WEB_UUID);
-      txRef.current = await service.getCharacteristic(WEB_TO_BOARD_UUID);
-      await rx.startNotifications();
-      rx.addEventListener('characteristicvaluechanged', ((event: Event) => {
-        const text = new TextDecoder().decode((event.target as unknown as { value: DataView }).value).trim();
-        if (text === 'FEED' || text.includes('"type":"feed"')) feed();
-      }) as EventListener);
-      device.addEventListener('gattserverdisconnected', (() => { setConnected(false); txRef.current = null; setMessage('연결이 끊어졌어요. 다시 연결해 주세요'); }) as EventListener);
-      setDeviceName(device.name || 'NU-40 DK'); setConnected(true); setMessage('연결됐어요! 보드의 버튼을 눌러보세요');
-    } catch (error) {
-      if ((error as Error).name !== 'NotFoundError') setMessage('연결하지 못했어요. 보드 전원을 확인해 주세요');
-    } finally { setConnecting(false); }
-  }
-
-  return <main className="app-shell" style={{ '--mood': info.color, '--blink': `${info.interval}ms` } as React.CSSProperties}>
-    <nav><div className="brand"><span className="brand-mark">NU</span><span>NU-40 PET</span></div><button className={`connect ${connected ? 'is-connected' : ''}`} onClick={connect} disabled={connecting || connected}><span className="signal">ᛒ</span>{connecting ? '연결 중…' : connected ? `${deviceName} 연결됨` : '보드 연결하기'}</button></nav>
-    <section className="hero"><div className="eyebrow"><span className="live-dot" /> NU-40 DK × TAMAGOTCHI</div><h1>오늘도 잘 먹고,<br /><em>반짝이는 하루!</em></h1><p>보드의 버튼으로 다마고치에게 밥을 주세요.<br />기분은 RGB LED의 반짝임으로 바로 알려드려요.</p></section>
-    <section className="pet-card"><div className="pixel-corner corner-one" /><div className="pixel-corner corner-two" />
-      <div className="pet-stage"><div className={`food-bite ${feedPulse ? 'animate' : ''}`} key={feedPulse}>♥</div><div className={`pet pet-${mood}`} aria-label={`${info.label} 상태의 다마고치`}><i className="ear left" /><i className="ear right" /><div className="face"><b className="eye left" /><b className="eye right" /><span className="mouth" /></div><i className="foot left" /><i className="foot right" /></div><div className="shadow" /></div>
-      <div className="status-panel"><span className="status-label">지금 기분</span><h2>{info.label}</h2><p>{info.note}</p><div className="meter-head"><span>배부름</span><strong>{hunger}%</strong></div><div className="meter"><span style={{ width: `${hunger}%` }} /></div><div className="led-readout"><span className="rgb-led" /><div><small>RGB LED</small><strong>{info.speed} 깜빡여요</strong></div><span className="speed-bars"><i /><i /><i /></span></div></div>
-    </section>
-    <section className="instruction" aria-live="polite"><span className="button-icon"><i /></span><div><small>HOW TO PLAY</small><strong>{message}</strong></div><button onClick={feed} className="test-feed" title="브라우저에서 먹이 주기 테스트">테스트 먹이</button></section>
-    <footer><span>© 2026 NU-40 PET LAB</span><span className="footer-pixels">■ □ ■</span><span>BLE READY · BE KIND TO YOUR PET</span></footer>
-  </main>;
+  return <main className="wallet-shell"><nav><div className="brand"><span className="brand-mark">NU</span><span>NuWallet Setup</span></div><button className={`connect ${connected ? 'is-connected' : ''}`} onClick={connect} disabled={busy || connected}>{connected ? '보드 연결됨' : busy ? '처리 중…' : 'Bluetooth 연결'}</button></nav>
+    <header className="wallet-hero"><span className="kicker">NU-40 DK · MULTI-CHAIN HARDWARE WALLET</span><h1>키는 보드 안에.<br /><em>서명만 밖으로.</em></h1><p>하나의 복구 문구에서 체인 규격에 맞는 키를 독립적으로 파생합니다.</p></header>
+    <section className="setup-panel"><div><span className="step">01</span><h2>지갑 초기화</h2><p>BIP-39 엔트로피는 NU-40 DK의 CSPRNG가 생성합니다.</p></div><button onClick={generate} disabled={!connected || busy || !!words}>24단어 지갑 생성</button>{words && <div className="recovery"><strong>복구 단어 인덱스 · 절대 공유하지 마세요</strong><ol>{words.map((w, i) => <li key={i}><small>{i + 1}</small>{w}</li>)}</ol><button onClick={confirm} disabled={busy}>백업 확인 및 보드에 저장</button></div>}</section>
+    <section className="chain-grid">{CHAINS.map(c => <article className="chain-card" key={c.id} style={{ '--chain': c.tone } as React.CSSProperties}><div className="chain-head"><span className="chain-dot" /><div><h2>{c.name}</h2><p>{c.curve}</p></div></div><dl><div><dt>파생 경로</dt><dd>{c.path}</dd></div><div><dt>개인키</dt><dd>보드 외부 반출 금지</dd></div></dl><div className="address"><small>ADDRESS</small><code>{addresses[c.id] ?? '아직 불러오지 않음'}</code></div><div className="actions"><button onClick={() => loadAddress(c.id)} disabled={!connected || busy}>주소 생성</button><button onClick={() => signTest(c.id)} disabled={!connected || busy || !addresses[c.id]}>테스트 서명</button></div>{signatures[c.id] && <div className="signature"><small>SIGNATURE</small><code>{signatures[c.id]}</code></div>}</article>)}</section>
+    <aside className="device-status" aria-live="polite"><span className={connected ? 'online' : ''} /><strong>{status}</strong></aside><footer><span>NuWallet protocol v1</span><span>4-button physical approval</span><span>Prototype · 실제 자금 사용 금지</span></footer></main>;
 }

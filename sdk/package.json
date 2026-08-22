@@ -1,0 +1,20 @@
+{
+  "name": "@nucode/hw-wallet",
+  "version": "0.1.0",
+  "description": "NuWallet multi-chain hardware wallet SDK — Ethereum and Solana over Web Bluetooth",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": ["ethereum", "solana", "hardware-wallet", "web-bluetooth", "ed25519", "nrf52"],
+  "license": "MIT",
+  "devDependencies": { "typescript": "^5.6.0" },
+  "peerDependencies": { "ethers": "^6.0.0" },
+  "peerDependenciesMeta": { "ethers": { "optional": true } }
+}
