@@ -11,11 +11,13 @@ import { DEFAULT_PATH, WalletError, SW, fromHex, hex } from './protocol.js';
 import { toChecksumAddress } from './address.js';
 import type { ChallengeCallbacks, Eip1193Provider } from './types.js';
 import { rlpEncode, encodeLegacyUnsigned, encodeLegacySigned } from './rlp.js';
+import { BASE_SEPOLIA } from './networks.js';
 
 export interface ProviderOptions extends ChallengeCallbacks {
-  /** 서명 외 RPC 를 넘길 노드. 없으면 해당 메서드는 거절된다. */
+  /** 서명 외 RPC 를 넘길 노드. 기본값은 Base Sepolia 공개 RPC. */
   rpcUrl?: string;
-  chainId: number;
+  /** EIP-155 v 계산과 eth_chainId 응답에 쓴다. 기본값 84532 (Base Sepolia). */
+  chainId?: number;
   path?: string;
 }
 
@@ -26,7 +28,12 @@ export class NuWalletProvider implements Eip1193Provider {
   private account: string | null = null;
   private rpcId = 1;
 
-  constructor(readonly wallet: NuWallet, readonly opts: ProviderOptions) {
+  readonly chainId: number;
+  readonly rpcUrl: string;
+
+  constructor(readonly wallet: NuWallet, readonly opts: ProviderOptions = {}) {
+    this.chainId = opts.chainId ?? BASE_SEPOLIA.chainId;
+    this.rpcUrl  = opts.rpcUrl  ?? BASE_SEPOLIA.rpcUrl;
     wallet.onDisconnect(() => {
       this.account = null;
       this.emit('disconnect', new WalletError(SW.DEVICE_ERROR, '기기 연결 끊김'));
@@ -61,7 +68,7 @@ export class NuWalletProvider implements Eip1193Provider {
       }
 
       case 'eth_chainId': return this.hexChainId;
-      case 'net_version': return String(this.opts.chainId);
+      case 'net_version': return String(this.chainId);
 
       case 'personal_sign': {
         // params: [data, address]  — MetaMask 순서를 따른다
@@ -86,8 +93,8 @@ export class NuWalletProvider implements Eip1193Provider {
       case 'eth_signTransaction':
       case 'eth_sendTransaction': {
         const tx = await this.fillTransaction(p[0] ?? {});
-        const unsigned = encodeLegacyUnsigned(tx, this.opts.chainId);
-        const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.opts.chainId, this.cb());
+        const unsigned = encodeLegacyUnsigned(tx, this.chainId);
+        const sig = await this.wallet.signTransaction('ethereum', this.path, unsigned, this.chainId, this.cb());
         const rawTx = encodeLegacySigned(tx, sig.v, fromHex(sig.r), fromHex(sig.s));
         if (method === 'eth_signTransaction') return hex(rawTx);
         return await this.rpc('eth_sendRawTransaction', [hex(rawTx)]);
@@ -102,7 +109,7 @@ export class NuWalletProvider implements Eip1193Provider {
     return { onStart: this.opts.onStart, onProgress: this.opts.onProgress };
   }
 
-  private get hexChainId(): string { return '0x' + this.opts.chainId.toString(16); }
+  private get hexChainId(): string { return '0x' + this.chainId.toString(16); }
 
   /** 빠진 필드를 노드에서 채운다. */
   private async fillTransaction(t: any) {
@@ -121,10 +128,7 @@ export class NuWalletProvider implements Eip1193Provider {
   }
 
   private async rpc(method: string, params: unknown[]): Promise<unknown> {
-    if (!this.opts.rpcUrl) {
-      throw new WalletError(SW.BAD_PARAM, `${method} 는 rpcUrl 이 있어야 처리할 수 있습니다`);
-    }
-    const res = await fetch(this.opts.rpcUrl, {
+    const res = await fetch(this.rpcUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: this.rpcId++, method, params }),

@@ -14,7 +14,7 @@ import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   NuWallet, NuWalletAdmin, WalletError, PIN,
-  mnemonicToIndices, indicesToMnemonic, type LockState,
+  mnemonicToIndices, type LockState,
 } from '@/sdk/src/index';
 import s from './setup.module.css';
 

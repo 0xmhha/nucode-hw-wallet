@@ -10,6 +10,11 @@ export {
 } from './protocol.js';
 export { keccak256, toChecksumAddress } from './address.js';
 export {
+  BASE_SEPOLIA, SOLANA_TESTNET, SOLANA_DEVNET, DEFAULT_NETWORKS,
+  defaultNetwork, txUrl, addressUrl,
+  type EvmNetwork, type SolanaNetwork,
+} from './networks.js';
+export {
   WORDLIST, wordToIndex, indexToWord, mnemonicToIndices, indicesToMnemonic,
 } from './wordlist.js';
 export {
