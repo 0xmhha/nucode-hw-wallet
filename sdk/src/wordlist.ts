@@ -285,7 +285,7 @@ export function indexToWord(i: number): string {
 export function wordToIndex(word: string): number {
   const w = word.trim().toLowerCase();
   if (!w) throw new WalletError(SW.BAD_PARAM, '빈 단어');
-  let exact = WORDLIST.indexOf(w);
+  const exact = WORDLIST.indexOf(w);
   if (exact >= 0) return exact;
   if (w.length >= 4) {
     const hits: number[] = [];

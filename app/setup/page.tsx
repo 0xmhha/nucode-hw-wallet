@@ -10,7 +10,7 @@
  *   PIN    사용자가 정한 고정 시퀀스. 보드는 LED 로 보여주지 않는다.
  *   챌린지  보드가 매번 새로 뽑는 랜덤 시퀀스. LED 로 보여준다.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   NuWallet, NuWalletAdmin, WalletError, PIN,
@@ -24,6 +24,7 @@ export default function SetupPage() {
   const wallet = useMemo(() => new NuWallet(), []);
   const admin = useMemo(() => new NuWalletAdmin(wallet), [wallet]);
 
+  const offDisconnect = useRef<(() => void) | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('보드를 연결하세요.');
@@ -71,10 +72,16 @@ export default function SetupPage() {
       throw new Error('Web Bluetooth 를 지원하지 않습니다. Chrome/Edge 의 HTTPS 또는 localhost 에서 열어주세요.');
     }
     await wallet.connect();
-    wallet.onDisconnect(() => { setConnected(false); setState(null); setStatus('연결이 끊겼습니다. 보드는 자동으로 잠깁니다.'); });
-    setConnected(true);
-    await refresh();
+    setConnected(true);          // 아래 조회가 실패해도 링크는 살아 있다
+    if (!offDisconnect.current) {
+      // connect() 마다 등록하면 재연결할 때마다 핸들러가 쌓인다.
+      offDisconnect.current = wallet.onDisconnect(() => {
+        setConnected(false); setState(null);
+        setStatus('연결이 끊겼습니다. 보드는 자동으로 잠깁니다.');
+      });
+    }
     setStatus(`${wallet.deviceName || 'NuWallet'} 연결됨`);
+    await refresh();
   });
 
   const unlock = () => run('잠금 해제', async () => {

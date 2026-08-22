@@ -6,7 +6,7 @@ export {
   SERVICE_UUID, RX_UUID, TX_UUID, CMD, EVT, SW, WalletError,
   DEFAULT_PATH, HARDENED, parsePath, encodePath, hex, fromHex, concat,
   frame, Reassembler, encodeRequest, decodeResponse, decodeEvent,
-  FLAG, PIN, TESTNET, DEFAULT_PATHS,
+  FLAG, PIN, TESTNET, DEFAULT_PATHS, CHAIN, encodeChainPath, type Chain,
 } from './protocol.js';
 export { keccak256, toChecksumAddress } from './address.js';
 export {
