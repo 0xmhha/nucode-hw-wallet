@@ -1,3 +1,6 @@
+/* Zephyr 전용. 다른 툴체인이 트리를 훑어도 이 파일은 비어 있게 둔다. */
+#if defined(__ZEPHYR__)
+
 #include "ble.h"
 #include "../../app/framing.h"
 #include "../../app/protocol.h"
@@ -207,3 +210,5 @@ int nu_ble_start(nu_wallet *w, nu_hal *hal, char *name_out, size_t name_cap) {
     LOG_INF("%s 광고 시작", dev_name);
     return 0;
 }
+
+#endif

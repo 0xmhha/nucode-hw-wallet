@@ -1,3 +1,6 @@
+/* 호스트 테스트 전용. 펌웨어 이미지에는 들어가지 않는다. */
+#if !defined(ARDUINO) && !defined(__ZEPHYR__)
+
 #include "hal_host.h"
 #include <string.h>
 
@@ -58,3 +61,5 @@ void nu_host_init(nu_host *h, nu_hal *hal, uint32_t seed) {
 }
 
 void nu_host_clear_out(nu_host *h) { h->out_n = 0; }
+
+#endif

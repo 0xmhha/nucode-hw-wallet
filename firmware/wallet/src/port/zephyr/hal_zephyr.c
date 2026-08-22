@@ -1,3 +1,6 @@
+/* Zephyr 전용. 다른 툴체인이 트리를 훑어도 이 파일은 비어 있게 둔다. */
+#if defined(__ZEPHYR__)
+
 /* Zephyr HAL.
  *
  *  난수 : sys_csrand_get() — nRF52840 의 RNG 주변장치를 쓴다
@@ -165,3 +168,5 @@ int nu_zephyr_hal_init(nu_hal *hal) {
     hal->ctx         = NULL;
     return 0;
 }
+
+#endif
