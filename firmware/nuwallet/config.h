@@ -14,8 +14,9 @@
 #define LED_4   PIN_LED4      /* P0.16 */
 
 /* 핀맵 PNG 는 "negative logic", variant.h 는 LED_STATE_ON=1 이라 서로 다르다.
- * 실물에서 LED 가 반대로 켜지면 이 값을 1 로 바꾼다. */
-#define LED_INVERT      0
+ * NU-40 DK 실물은 LOW 에서 켜진다 — 실기기 확인 결과 1 이 맞다.
+ * HAL 이 이 값을 읽는다 (src/port/arduino/hal_arduino.cpp). */
+#define NU_LED_INVERT   1
 
 #define BTN_DEBOUNCE_MS 25
 

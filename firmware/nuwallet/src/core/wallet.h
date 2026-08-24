@@ -21,7 +21,6 @@ typedef struct {
     uint8_t  stage;                  /* PIN_NEW: 0 = 1차 입력, 1 = 재입력 */
     uint8_t  seq_len, pos, attempts;
     uint32_t started_ms, phase_ms;
-    uint8_t  shown;                  /* LED 로 보여준 단계 수 */
     uint8_t  showing;                /* 1 이면 아직 시퀀스 표시 중 */
 
     uint8_t  hash[32];               /* secp256k1 서명 대상 (미리 해시해 둔다) */

@@ -16,8 +16,6 @@
 #include <string.h>
 
 /* ── LED 타이밍 ─────────────────────────────────────────────────────────── */
-#define SHOW_ON_MS   450
-#define SHOW_GAP_MS  200
 #define IDLE_BLINK   1000
 
 /* ── 챌린지 ─────────────────────────────────────────────────────────────── */
@@ -91,7 +89,6 @@ void nu_challenge_start(nu_wallet *w, uint8_t cmd, uint8_t kind, uint8_t steps) 
     r->stage = 0;
     r->started_ms = w->hal->millis(w->hal->ctx);
     r->phase_ms = r->started_ms;
-    r->shown = 0;
 
     switch (kind) {
     case NU_APPROVAL_CONFIRM:
@@ -102,7 +99,10 @@ void nu_challenge_start(nu_wallet *w, uint8_t cmd, uint8_t kind, uint8_t steps) 
          * 구분이 안 된다. 한 번 누르는 비용은 같으니 무작위로 둔다. */
         r->seq_len = NU_CONFIRM_STEPS;
         r->attempts = NU_CHALLENGE_ATTEMPTS;
-        r->showing = 1;
+        /* 표시 단계가 없다. 눌러야 할 LED 를 **계속** 켜 두고 바로 입력을 받는다.
+         * v1 의 시퀀스 표시를 재사용해 450ms 만 반짝이고 껐더니, 사용자가 눈을
+         * 떼는 순간 어느 버튼인지 알 수 없었다 — 실기기에서 드러났다. */
+        r->showing = 0;
         {
             uint8_t rnd = 0;
             if (!w->hal->random(&rnd, 1, w->hal->ctx)) {
@@ -316,14 +316,11 @@ void nu_wallet_button(nu_wallet *w, uint8_t idx) {
         return;
     }
 
-    /* 틀렸다 — 다시 보여주고 다시 받는다. */
+    /* 틀렸다. LED 는 계속 켜져 있으므로 다시 받기만 하면 된다. */
     r->pos = 0;
     if (r->attempts) r->attempts--;
     progress(w);
-    if (r->attempts == 0) { nu_challenge_finish(w, NU_SW_CHALLENGE_FAILED, NULL, 0); return; }
-    r->showing = 1;
-    r->shown = 0;
-    r->phase_ms = w->hal->millis(w->hal->ctx);
+    if (r->attempts == 0) nu_challenge_finish(w, NU_SW_CHALLENGE_FAILED, NULL, 0);
 }
 
 /* ── 주기 처리 ──────────────────────────────────────────────────────────── */
@@ -344,9 +341,12 @@ void nu_wallet_tick(nu_wallet *w, uint32_t now_ms) {
     }
 
     if (!r->cmd) {
-        /* 대기 중 표시: 지갑 없음 = 소등, 잠김 = LED0 점멸, 해제 = LED3 점등 */
-        if (!w->rec_len)      nu_leds(w, 0);
-        else if (!w->unlocked) nu_leds(w, ((now_ms / IDLE_BLINK) & 1) ? 0x01 : 0x00);
+        /* docs/protocol.md §8 의 LED 표.
+         *   지갑 없음   LED1 느린 점멸 — 셋업이 필요하다는 것이 눈에 띄어야 한다
+         *   잠김        전부 꺼짐 — 기본 상태이고, 어두운 편이 정보도 덜 흘린다
+         *   잠금 해제됨 LED4 점등 — 열려 있다는 것은 보여야 한다 */
+        if (!w->rec_len)       nu_leds(w, ((now_ms / IDLE_BLINK) & 1) ? 0x01 : 0x00);
+        else if (!w->unlocked) nu_leds(w, 0);
         else                   nu_leds(w, 0x08);
         return;
     }
@@ -366,27 +366,6 @@ void nu_wallet_tick(nu_wallet *w, uint32_t now_ms) {
         return;
     }
 
-    if (r->showing) {
-        /* 시퀀스를 한 자리씩 보여준다: 켜짐 450ms, 꺼짐 200ms. */
-        const uint32_t elapsed = nu_elapsed(now_ms, r->phase_ms);
-        if (r->shown >= r->seq_len) {
-            if (elapsed >= SHOW_GAP_MS) { r->showing = 0; nu_leds(w, 0); }
-            else nu_leds(w, 0);
-            return;
-        }
-        if (elapsed < SHOW_ON_MS) {
-            nu_leds(w, (uint8_t)(1u << r->seq[r->shown]));
-        } else if (elapsed < SHOW_ON_MS + SHOW_GAP_MS) {
-            nu_leds(w, 0);
-        } else {
-            r->shown++;
-            r->phase_ms = now_ms;
-        }
-        return;
-    }
-
-    /* 입력 대기 — 맞게 누른 개수만큼 LED 를 켠다. */
-    uint8_t m = 0;
-    for (uint8_t i = 0; i < r->pos && i < 4; i++) m |= (uint8_t)(1u << i);
-    nu_leds(w, m);
+    /* 서명 확인 — 눌러야 할 LED 하나를 계속 켜 둔다. */
+    nu_leds(w, (uint8_t)(1u << r->seq[0]));
 }

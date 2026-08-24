@@ -3,6 +3,7 @@
 
 #include "hal_arduino.h"
 #include "../../core/protocol.h"
+#include "../../../config.h"
 
 #include "../../chains/solana/solana.h"
 
@@ -19,8 +20,11 @@ using namespace Adafruit_LittleFS_Namespace;
 static const uint8_t LEDS[NU_BUTTON_COUNT] = { PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4 };
 static const uint8_t BTNS[NU_BUTTON_COUNT] = { PIN_BUTTON1, PIN_BUTTON2, PIN_BUTTON3, PIN_BUTTON4 };
 
+/* 극성은 스케치의 config.h 가 정한다. 예전에는 여기에 NU_LED_INVERT 를 따로
+ * 두고 config.h 에는 LED_INVERT 를 뒀는데, 이름이 달라서 config.h 쪽 스위치가
+ * 아무 일도 하지 않았다. */
 #ifndef NU_LED_INVERT
-#define NU_LED_INVERT 0
+#error "config.h 를 먼저 포함해야 한다 (NU_LED_INVERT)"
 #endif
 #define NU_DEBOUNCE_MS 25
 

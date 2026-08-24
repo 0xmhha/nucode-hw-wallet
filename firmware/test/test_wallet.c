@@ -548,6 +548,63 @@ static void test_pin(void) {
        last_response(&status, &p, &len) && status == NU_SW_LOCKED);
 }
 
+/* LED 는 사람에게 도달하는 유일한 채널이다. 화면이 없으니 여기가 틀리면
+ * 사용자는 무엇을 눌러야 하는지 알 수 없다. docs/protocol.md §8 의 표를 못박는다. */
+static void test_leds(void) {
+    puts("지갑  LED 표시");
+    boot(0x1ed1, 0);
+    uint16_t status; const uint8_t *p; size_t len;
+
+    /* 지갑 없음 — LED1 느린 점멸. 셋업이 필요하다는 것이 눈에 띄어야 한다. */
+    H.now = 0;    nu_wallet_tick(&W, H.now);
+    const uint8_t a = H.leds;
+    H.now = 1000; nu_wallet_tick(&W, H.now);
+    ok("지갑 없음: LED1 이 점멸한다", (a ^ H.leds) == 0x01);
+
+    restore_abandon();
+    nu_wallet_tick(&W, H.now);
+    ok("잠금 해제됨: LED4 점등", H.leds == 0x08);
+
+    request(NU_CMD_LOCK, NULL, 0);
+    nu_wallet_tick(&W, H.now);
+    ok("잠김: 전부 꺼짐", H.leds == 0x00);
+
+    /* PIN 입력 — 누른 개수만 보여준다. 값은 절대 보여주지 않는다. */
+    request(NU_CMD_UNLOCK, NULL, 0);
+    last_response(&status, &p, &len);
+    nu_wallet_button(&W, TEST_PIN[0]);
+    nu_wallet_tick(&W, H.now);
+    ok("PIN 1자리: LED 1개", H.leds == 0x01);
+    nu_wallet_button(&W, TEST_PIN[1]);
+    nu_wallet_tick(&W, H.now);
+    ok("PIN 2자리: LED 2개", H.leds == 0x03);
+    for (uint8_t i = 2; i < NU_PIN_LEN; i++) nu_wallet_button(&W, TEST_PIN[i]);
+    ok("PIN 6자리로 해제됨", W.unlocked == 1);
+
+    /* 서명 확인 — 눌러야 할 LED 하나가 **계속** 켜져 있어야 한다.
+     * 예전에는 450ms 만 반짝이고 꺼져서, 눈을 떼면 어느 버튼인지 알 수 없었다. */
+    request(NU_CMD_SIGN_PERSONAL,
+            (const uint8_t *)ETH_PATH_REQ "hi", 24);
+    ok("서명 PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING);
+    const uint8_t want = W.req.seq[0];
+    ok("승인 대상은 버튼 하나", W.req.seq_len == 1 && want < NU_BUTTON_COUNT);
+    for (int i = 0; i < 20; i++) {          /* 2초 동안 계속 켜져 있어야 한다 */
+        H.now += 100;
+        nu_wallet_tick(&W, H.now);
+        if (H.leds != (uint8_t)(1u << want)) break;
+    }
+    ok("서명 확인: 대상 LED 가 계속 켜져 있다", H.leds == (uint8_t)(1u << want));
+
+    /* 틀린 버튼을 눌러도 LED 는 계속 켜져 있어야 한다. */
+    nu_wallet_button(&W, (uint8_t)((want + 1) % NU_BUTTON_COUNT));
+    nu_wallet_tick(&W, H.now);
+    ok("틀려도 LED 는 그대로", H.leds == (uint8_t)(1u << want));
+    ok("시도 횟수만 준다", W.req.attempts == NU_CHALLENGE_ATTEMPTS - 1);
+
+    nu_wallet_button(&W, want);
+    ok("맞는 버튼으로 승인된다", W.req.cmd == 0);
+}
+
 /* 세션은 "잠금 해제 후 경과" 가 아니라 **유휴** 로 닫혀야 한다.
  * 실기기에서 잡힌 버그다 — 계속 쓰고 있는데도 5분이 지나면 닫혔다.
  * UNLOCK 성공 경로가 시계를 밀지 않은 것이 직접 원인이었고, 활동이 시계를
@@ -757,6 +814,7 @@ int main(void) {
     test_pin();
     test_pin_attempts_survive_reboot();
     test_session_idle();
+    test_leds();
     test_passphrase_and_wipe();
     test_bad_input();
     printf("\n%d개 중 %d개 실패\n", total, fails);
