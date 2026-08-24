@@ -2,32 +2,45 @@
 
 이 문서는 NU-40 DK(nRF52840) 보드에 `arduino-cli`를 사용하지 않고 펌웨어를 설치하는 방법을 설명한다.
 
+설치할 것은 **지갑 펌웨어**(`firmware/nuwallet/`) 다. 저장소에 남아 있는 NU-40 PET
+데모는 별개이며, 지갑 웹앱과 함께 쓸 수 없다.
+
 ## 권장 방법: UF2 파일 복사
 
 NU-40 DK에는 Adafruit nRF52 UF2/DFU 부트로더가 탑재되어 있다. 따라서 별도의 플래싱 프로그램 없이 보드를 USB 드라이브로 마운트한 뒤 `.uf2` 파일을 복사할 수 있다.
 
-이 저장소에서 바로 설치할 수 있는 펌웨어는 다음과 같다.
+설치할 파일은 하나다.
 
 ```text
-firmware/build/NU40PET.UF2      NU-40 PET 데모 (다마고치)
+firmware/nuwallet/build/NUWALLET.UF2    지갑 펌웨어
 ```
 
-> 지갑 펌웨어의 `.uf2` 는 아직 이 디렉터리에 없다. 아래 "펌웨어를 직접 빌드할 때"
-> 를 따라 만든다. 설치 절차는 어느 펌웨어든 동일하다.
+> ⚠️  **옛 NU-40 PET 데모를 지갑 대신 굽지 않는다.** 두 펌웨어는 서로 다른 BLE
+> 서비스 UUID 를 광고한다 — 지갑은 `6e754000-…`, 데모는 `7d2a0001-…`. 데모가
+> 올라간 보드는 지갑 웹앱의 기기 선택 창에 **아예 나타나지 않는다.**
+> "페어링이 안 된다"로 보이는 증상의 흔한 원인이다. 데모의 `.uf2` 는 저장소에
+> 두지 않는다 (필요하면 `firmware/arduino/nu40_pet/` 에서 만든다).
+>
+> 지갑 `.uf2` 의 정본 위치는 `firmware/nuwallet/build/` 하나다 (`.gitignore` 가
+> 이 경로만 추적한다). `firmware/build/` 안에 `NUWALLET.UF2` 가 보인다면 예전
+> 빌드가 남은 것이니 무시하거나 지운다.
 
 ### 설치 순서
 
 1. NU-40 DK를 USB 데이터 케이블로 컴퓨터에 연결한다.
 2. 보드의 `RESET` 버튼을 빠르게 두 번 누른다.
 3. 보드가 UF2 부트로더 모드로 진입하면 `NRF52BOOT`라는 USB 드라이브가 나타난다.
-4. `firmware/build/NU40PET.UF2`를 `NRF52BOOT` 드라이브에 복사한다.
+4. `firmware/nuwallet/build/NUWALLET.UF2`를 `NRF52BOOT` 드라이브에 복사한다.
 5. 복사가 끝나면 드라이브가 자동으로 사라지고 보드가 새 펌웨어로 재부팅된다.
 
 macOS Finder에서 파일을 드래그해도 되고, 저장소 루트에서 다음 명령을 실행해도 된다.
 
 ```sh
-cp firmware/build/NU40PET.UF2 /Volumes/NRF52BOOT/
+cp firmware/nuwallet/build/NUWALLET.UF2 /Volumes/NRF52BOOT/
 ```
+
+> 복사가 끝나면 드라이브가 스스로 사라진다. macOS 가 "디스크를 제대로 꺼내지
+> 않았습니다" 경고를 띄우는데 정상이다.
 
 마운트 여부는 다음 명령으로 확인한다.
 
@@ -53,7 +66,8 @@ ls /Volumes
 | Zephyr 빌드 | `west flash` | Zephyr 워크스페이스와 지원 디버거를 사용하는 경우 |
 | `.hex` | J-Link Commander, OpenOCD 또는 Nordic 도구 | SWD 디버거로 직접 플래시하는 경우 |
 
-이 저장소에는 `firmware/build/nu40_pet.ino.hex`도 있지만, 일반적인 설치에는 `.hex` 파일이나 SWD 도구가 필요하지 않다. `NU40PET.UF2`를 복사하는 방식이 가장 간단하다.
+일반적인 설치에는 `.hex` 파일이나 SWD 도구가 필요하지 않다. `NUWALLET.UF2` 를
+복사하는 방식이 가장 간단하다.
 
 ## 펌웨어를 직접 빌드할 때
 
@@ -65,8 +79,12 @@ ls /Volumes
 (`~/Library/Arduino15/packages/nucode/hardware/nrf52/`). 보드 정의(`nu40dk`),
 핀 배치(`nu40dk_nrf52840`), 부트로더가 모두 여기 들어 있다.
 
+지갑 펌웨어는 스케치 디렉터리에서 빌드한다. 산출물은 그 옆 `build/` 에 둔다 —
+`firmware/build/` 는 옛 데모 전용이라 섞으면 어느 쪽 `.uf2` 인지 알 수 없게 된다.
+
 ```sh
-arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir firmware/build <스케치 경로>
+cd firmware/nuwallet
+arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir ./build .
 ```
 
 ### 2. `.hex` → `.uf2`
@@ -77,7 +95,7 @@ arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir firmware/build <스�
 ```sh
 CORE=~/Library/Arduino15/packages/nucode/hardware/nrf52/1.0.2
 python3 "$CORE/tools/uf2conv/uf2conv.py" -f 0xADA52840 -c \
-        -o firmware/build/NUWALLET.UF2 firmware/build/<스케치>.ino.hex
+        -o build/NUWALLET.UF2 build/nuwallet.ino.hex
 ```
 
 `0xADA52840` 은 nRF52840 의 UF2 family id 다 (`boards.txt` 의
@@ -89,8 +107,20 @@ python3 "$CORE/tools/uf2conv/uf2conv.py" -f 0xADA52840 -c \
 `arduino-cli` 가 `adafruit-nrfutil` 을 호출하고, 1200bps 터치로 보드를 알아서
 부트로더에 넣는다. RESET 을 두 번 누를 필요가 없다.
 
+**먼저 `adafruit-nrfutil` 이 있어야 한다.** 코어에 들어 있는 바이너리는 Windows
+용뿐이라 macOS·Linux 에서는 직접 설치한다.
+
 ```sh
-arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn nucode:nrf52:nu40dk <스케치 경로>
+pip3 install --user adafruit-nrfutil
+```
+
+`--output-dir` 로 빌드했다면 업로드에도 같은 경로를 `--input-dir` 로 알려줘야
+한다. 없으면 기본 빌드 캐시를 뒤지다 산출물을 찾지 못한다.
+
+```sh
+cd firmware/nuwallet
+arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn nucode:nrf52:nu40dk \
+            --input-dir ./build .
 ```
 
 ## Zephyr 는 지금 바로 되지 않는다
@@ -115,10 +145,19 @@ Zephyr 로 가려면 보드를 직접 정의해야 한다.
 
 펌웨어가 시작되면 보드가 BLE 로 광고한다. 광고 이름은 펌웨어마다 다르다.
 
-| 펌웨어 | 광고 이름 | 확인할 페이지 |
-| --- | --- | --- |
-| NU-40 PET 데모 | `NU-40 PET` | 데모 페이지 |
-| 지갑 | `NuWallet-XXXXXX` (기기 고유) | `/` 와 `/setup` |
+| 펌웨어 | 광고 이름 | 서비스 UUID | 확인할 페이지 |
+| --- | --- | --- | --- |
+| 지갑 | `NuWallet-A2B4C6` 형태 (기기 고유) | `6e754000-…` | `/`, `/setup`, `/dapp`, `/debug` |
+| NU-40 PET 데모 | `NU-40 PET` | `7d2a0001-…` | 데모 페이지 |
+
+지갑 이름의 접미사 6자는 `NRF_FICR->DEVICEID` 에서 뽑으며 문자와 숫자가 번갈아
+나온다 (헷갈리는 `I`·`O`·`0`·`1` 은 빼고 쓴다). 16진수가 아니다. 보드마다 다르고
+재부팅해도 같다.
+
+> **펌웨어를 다시 구웠다면 OS 블루투스 설정에서 기존 `NuWallet-…` 기기를 먼저
+> 삭제(잊기)한다.** 보드는 본딩 키를 잊었는데 PC 는 옛 키를 그대로 쓰기 때문에,
+> 그냥 다시 연결하면 알림 구독 단계에서 링크가 끊긴다. 재플래시할 때마다 겪는다.
+> macOS 는 시스템 설정 → Bluetooth → 해당 기기 → i → "이 기기 잊기".
 
 Chrome 또는 Edge 계열 브라우저에서 프로젝트 웹 앱을 열고 보드 연결 기능을 사용해
 동작을 확인할 수 있다. 연결이 안 되면 `docs/BLUETOOTH.md` 를 본다.
