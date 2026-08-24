@@ -17,9 +17,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test --test-timeout 20000 test/*.test.js",
+    "test": "node --test test/protocol.test.js test/transport.test.js test/pin.test.js test/networks.test.js test/wordlist.test.js test/conformance.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "pretest": "npm run build && make -C ../firmware/test protocol_bridge"
+    "pretest": "npm run build && make -C ../firmware/test protocol_bridge",
+    "test:device": "node --test test/device.test.js",
+    "test:device:interactive": "NUWALLET_DEVICE_INTERACTIVE=1 node --test test/device.test.js"
   },
   "keywords": [
     "ethereum",

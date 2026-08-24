@@ -599,7 +599,16 @@ DApp                    SDK                  기기                  사용자
 ```sh
 python3 scripts/check-protocol.py   # 명령 번호·상태 코드·UUID 가 세 곳에서 같은지
 cd sdk && npm test                  # 펌웨어 코어를 빌드해 실제로 주고받아 본다
+
+# 보드가 있으면 (webbluetooth 가 Node 에 navigator.bluetooth 를 채운다)
+npm i --no-save webbluetooth
+npm run test:device                 # 조회성 검사만
+npm run test:device:interactive     # 버튼을 눌러야 하는 것까지
 ```
+
+`test:device` 는 **웹앱과 같은 SDK 로** 진짜 보드를 상대한다. 프로토콜을 한 번 더
+구현하지 않는 것이 중요하다 — 그러면 그것이 갈라지는 것이 다음 버그가 된다.
+보드가 없으면 통째로 건너뛴다.
 
 | 명령 | 펌웨어 | SDK | 비고 |
 |---|---|---|---|
@@ -622,3 +631,8 @@ cd sdk && npm test                  # 펌웨어 코어를 빌드해 실제로 �
 CryptoCell 하드웨어가 호스트에 없기 때문이다. 그래서 Solana 는 프로토콜 흐름과
 SLIP-0010 파생까지만 검증되고, **서명 값의 정확성은 실기기로만 확인할 수 있다.**
 Ethereum 은 공유 암호 스택을 그대로 쓰므로 공식 벡터와 대조된다.
+
+그 밖에 호스트가 못 보는 것: 버튼·LED·플래시 같은 하드웨어, 그리고 타이밍.
+PBKDF2 가 몇 초를 쓰는 동안 BLE 링크가 유지되는지는 보드에서만 알 수 있고,
+실제로 그 시간차 때문에 시계가 어긋나 세션이 즉시 닫히는 버그가 있었다.
+`npm run test:device` 가 그 영역을 맡는다.
