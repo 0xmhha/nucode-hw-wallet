@@ -2,6 +2,7 @@
 #if !defined(ARDUINO) && !defined(__ZEPHYR__)
 
 #include "hal_host.h"
+#include "../../../../test/host_ed25519.h"
 #include <string.h>
 
 static int h_random(uint8_t *out, size_t n, void *ctx) {
@@ -34,6 +35,15 @@ static int h_store_erase(void *ctx) {
     return 1;
 }
 static void h_leds(uint8_t mask, void *ctx) { ((nu_host *)ctx)->leds = mask; }
+static int h_ed_pub(const uint8_t key[32], uint8_t pub[32], void *ctx) {
+    (void)ctx; return host_ed25519_pub(key, pub);
+}
+static int h_ed_sign(const uint8_t key[32], const uint8_t *msg, size_t len,
+                     uint8_t sig[64], void *ctx) {
+    (void)ctx; return host_ed25519_sign(key, msg, len, sig);
+}
+static uint8_t h_buttons(void *ctx) { return ((nu_host *)ctx)->btn_held; }
+static int h_bonds_erase(void *ctx) { ((nu_host *)ctx)->bonds_erased = 1; return 1; }
 static uint32_t h_millis(void *ctx) { return ((nu_host *)ctx)->now; }
 static void h_send(uint8_t tag, const uint8_t *msg, size_t len, void *ctx) {
     nu_host *h = (nu_host *)ctx;
@@ -50,6 +60,8 @@ void nu_host_init(nu_host *h, nu_hal *hal, uint32_t seed) {
     h->leds = 0;
     h->rng_fail = 0;
     h->out_n = 0;
+    h->btn_held = 0;
+    h->bonds_erased = 0;
     hal->random = h_random;
     hal->store_read = h_store_read;
     hal->store_write = h_store_write;
@@ -57,6 +69,10 @@ void nu_host_init(nu_host *h, nu_hal *hal, uint32_t seed) {
     hal->leds = h_leds;
     hal->send = h_send;
     hal->millis = h_millis;
+    hal->buttons = h_buttons;
+    hal->ed25519_pub = h_ed_pub;
+    hal->ed25519_sign = h_ed_sign;
+    hal->bonds_erase = h_bonds_erase;
     hal->ctx = h;
 }
 

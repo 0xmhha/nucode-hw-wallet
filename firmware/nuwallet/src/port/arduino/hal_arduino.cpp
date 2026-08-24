@@ -2,9 +2,12 @@
 #if defined(ARDUINO)
 
 #include "hal_arduino.h"
-#include "../../app/protocol.h"
+#include "../../core/protocol.h"
+
+#include "../../chains/solana/solana.h"
 
 #include <Arduino.h>
+#include <bluefruit.h>
 #include <Adafruit_nRFCrypto.h>
 #include <Adafruit_LittleFS.h>
 #include <InternalFileSystem.h>
@@ -88,10 +91,48 @@ static void hal_leds(uint8_t mask, void *ctx) {
 
 static uint32_t hal_millis(void *ctx) { (void)ctx; return millis(); }
 
+/* ── Ed25519 (Solana) ───────────────────────────────────────────────────────
+ * CryptoCell 하드웨어에만 있어서 코어가 직접 하지 못한다. secp256k1 은
+ * micro-ecc 로 코어가 직접 한다 — 곡선 하나만 HAL 에 있는 이유다. */
+
+static int hal_ed25519_pub(const uint8_t key[32], uint8_t pub[32], void *ctx) {
+    (void)ctx;
+    return solana_public_key(key, pub);
+}
+
+static int hal_ed25519_sign(const uint8_t key[32], const uint8_t *msg, size_t len,
+                            uint8_t sig[64], void *ctx) {
+    (void)ctx;
+    return solana_sign(key, msg, len, sig);
+}
+
+/* ── 본딩 ───────────────────────────────────────────────────────────────────
+ * 공장 초기화가 부른다. 시드만 지우고 본딩을 남기면, 보드는 초기화됐는데
+ * 호스트는 옛 페어링 키를 계속 써서 다음 연결이 알림 구독에서 끊긴다.
+ * 사용자는 원인을 찾을 수 없다. */
+
+static int hal_bonds_erase(void *ctx) {
+    (void)ctx;
+    Bluefruit.Periph.clearBonds();
+    Bluefruit.Central.clearBonds();
+    return 1;
+}
+
 /* ── 버튼 ───────────────────────────────────────────────────────────────── */
 
 struct Btn { bool raw, stable; uint32_t at; };
 static Btn B[NU_BUTTON_COUNT];
+
+/* 지금 눌려 있는 버튼의 마스크. 공장 초기화가 "두 버튼을 붙잡고 있는지" 를
+ * 알아야 하는데, 눌림 엣지만으로는 알 수 없다. */
+static uint8_t hal_buttons(void *ctx) {
+    (void)ctx;
+    uint8_t m = 0;
+    for (int i = 0; i < NU_BUTTON_COUNT; i++) {
+        if (B[i].stable) m |= (uint8_t)(1u << i);
+    }
+    return m;
+}
 
 int nu_arduino_poll_button(uint32_t now_ms) {
     int edge = -1;
@@ -124,6 +165,10 @@ int nu_arduino_hal_init(nu_hal *hal) {
     hal->store_erase = hal_store_erase;
     hal->leds        = hal_leds;
     hal->millis      = hal_millis;
+    hal->buttons     = hal_buttons;
+    hal->bonds_erase = hal_bonds_erase;
+    hal->ed25519_pub  = hal_ed25519_pub;
+    hal->ed25519_sign = hal_ed25519_sign;
     hal->send        = NULL;            /* 스케치의 BLE 글루가 채운다 */
     hal->ctx         = NULL;
     return 0;

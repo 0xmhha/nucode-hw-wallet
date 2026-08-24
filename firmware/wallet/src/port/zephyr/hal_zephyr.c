@@ -8,7 +8,7 @@
  *  LED  : devicetree 의 led0..led3 별칭
  *  버튼 : sw0..sw3 별칭. 인터럽트 -> 디바운스 워크 -> 콜백                 */
 #include "hal_zephyr.h"
-#include "../../app/protocol.h"
+#include "core/protocol.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>

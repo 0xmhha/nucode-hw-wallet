@@ -20,6 +20,14 @@ uint32_t nu_rd32(const uint8_t *p);
 
 void nu_leds(nu_wallet *w, uint8_t mask);
 
+/** now 가 since 보다 앞선 것처럼 보이면 0 을 돌려준다.
+ *
+ * 호출자가 캐시해 둔 시각을 넘기면(.ino 의 loop() 가 그렇다) now 가 since 보다
+ * **과거**일 수 있다. 그냥 빼면 uint32 가 언더플로해서 49일이 지난 것처럼 보이고,
+ * 세션이 즉시 닫힌다. 실기기에서 이것 때문에 잠금 해제 직후 다시 잠겼다.
+ * 49일 진짜 랩어라운드도 같은 규칙으로 처리된다. */
+uint32_t nu_elapsed(uint32_t now, uint32_t since);
+
 /** 응답 하나를 내보낸다 (STATUS ‖ LEN ‖ PAYLOAD). */
 void nu_reply(nu_wallet *w, uint16_t status, const uint8_t *payload, size_t len);
 /** COUNT ‖ WORD_IDX* 형태의 응답. */
@@ -41,6 +49,9 @@ int  nu_seed_from_words(nu_wallet *w, const uint16_t *words, uint8_t count,
 int  nu_derive(const nu_wallet *w, const uint32_t *path, uint8_t depth,
                uint8_t addr[20], uint8_t pub65[65], uint8_t chain[32],
                uint8_t priv[32]);
+/** SLIP-0010 Ed25519 파생 (Solana). 실패 0. */
+int  nu_derive_ed25519(const nu_wallet *w, const uint32_t *path, uint8_t depth,
+                       uint8_t key[32]);
 /** 워드를 PIN 으로 봉인해 플래시에 쓴다. 실패 0. */
 int  nu_persist(nu_wallet *w, const uint16_t *words, uint8_t count,
                 const uint8_t *pin, uint8_t pin_len);
@@ -60,6 +71,12 @@ void nu_request_clear(nu_wallet *w);
 /** GET_RESULT 용으로 마지막 결과를 기억해 둔다. */
 void nu_remember(nu_wallet *w, uint32_t id, uint16_t status,
                  const uint8_t *payload, uint8_t len);
+
+/* ── wallet.c (공장 초기화) ─────────────────────────────────────────────── */
+/** 확인 시퀀스를 기다리는 중이면 이 눌림을 소비하고 1 을 반환한다. */
+int  nu_factory_button(nu_wallet *w, uint8_t idx);
+/** 매 틱마다 버튼 홀드를 본다. 카운트다운 중이면 LED 를 잡고 1 을 반환한다. */
+int  nu_factory_tick(nu_wallet *w, uint32_t now_ms);
 
 /* ── commands.c ─────────────────────────────────────────────────────────── */
 /* nu_wallet_handle / nu_wallet_framing_error 는 wallet.h 에 있다. */

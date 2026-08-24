@@ -6,10 +6,13 @@ import { WebAppFooter } from './components/WebAppFooter';
 
 /* `ready: false` 인 체인은 펌웨어가 아직 처리하지 못한다 (UNSUPPORTED_CHAIN 을
  * 돌려준다). 버튼을 눌러 보고 오류를 만나는 대신 카드에 미리 표시한다.
- * Solana 는 파생 경로만 있고 Ed25519 서명 구현이 펌웨어에 없다. */
+ *
+ * Solana 는 펌웨어 양쪽(코어·보드) 모두 구현돼 있고 적합성 테스트를 통과한다.
+ * 다만 Ed25519 는 nRF52840 의 CryptoCell 하드웨어에서만 도는 부분이라
+ * 호스트 테스트가 값을 검증하지 못한다 — 실기기 확인이 남아 있다. */
 const CHAINS: Array<{ id: Chain; name: string; network: string; curve: string; path: string; tone: string; ready: boolean }> = [
   { id: 'ethereum', name: 'Ethereum', network: `Base Sepolia · chainId ${TESTNET.ethereum.chainId}`, curve: 'secp256k1 · ECDSA', path: "m/44'/60'/0'/0/0", tone: '#6574c4', ready: true },
-  { id: 'solana', name: 'Solana', network: 'Testnet · cluster testnet', curve: 'Ed25519 · SLIP-0010', path: "m/44'/501'/0'/0'", tone: '#14f195', ready: false },
+  { id: 'solana', name: 'Solana', network: 'Testnet · cluster testnet', curve: 'Ed25519 · SLIP-0010', path: "m/44'/501'/0'/0'", tone: '#14f195', ready: true },
 ];
 
 const TX_EXAMPLES: Record<Chain, { title: string; fields: Array<[string, string]> }> = {

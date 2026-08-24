@@ -8,14 +8,17 @@ set(SHARED ${CMAKE_CURRENT_SOURCE_DIR}/../nuwallet/src)
 target_sources(app PRIVATE
     src/main.c
 
-    src/app/framing.c
-    src/app/rlp.c
-    src/app/store.c
-    src/app/wire.c
-    src/app/session.c
-    src/app/challenge.c
-    src/app/commands.c
-    src/app/wallet.c
+
+    # 코어는 Arduino 스케치와 공유한다 (Arduino 는 스케치 폴더 밖을 컴파일하지
+    # 못해서 코어가 그쪽에 있어야 한다). 두 포트가 같은 파일을 컴파일한다.
+    ${SHARED}/core/framing.c
+    ${SHARED}/core/rlp.c
+    ${SHARED}/core/store.c
+    ${SHARED}/core/wire.c
+    ${SHARED}/core/session.c
+    ${SHARED}/core/challenge.c
+    ${SHARED}/core/commands.c
+    ${SHARED}/core/wallet.c
 
     src/port/zephyr/hal_zephyr.c
     src/port/zephyr/ble.c
@@ -25,6 +28,7 @@ target_sources(app PRIVATE
     ${SHARED}/crypto/keccak.c
     ${SHARED}/crypto/bip39.c
     ${SHARED}/crypto/bip32.c
+    ${SHARED}/crypto/slip10.c
     ${SHARED}/crypto/ecdsa.c
 
     ${SHARED}/micro-ecc/uECC.c

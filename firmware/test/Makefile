@@ -3,8 +3,13 @@
 #   make test       암호 스택 + 지갑 코어 전부
 #   make test_wallet && ./test_wallet
 CC     ?= cc
+CXX    ?= c++
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wno-unused-parameter \
           -DuECC_PLATFORM=uECC_arch_other -I../nuwallet/src
+
+# Arduino 컨트롤러는 C++ 다. NUWALLET_HOST_BUILD 가 Arduino 헤더를 빼낸다.
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter \
+            -DNUWALLET_HOST_BUILD -I../nuwallet/src
 
 SHARED = ../nuwallet/src
 ZSRC   = ../wallet/src
@@ -13,7 +18,10 @@ ZSRC   = ../wallet/src
 # 하나 추가할 때마다 Makefile 을 고치게 하지 않는다.
 CRYPTO  = $(wildcard $(SHARED)/crypto/*.c) $(SHARED)/micro-ecc/uECC.c
 CHAINS  = $(wildcard $(SHARED)/chains/ethereum/*.c)
-APP     = $(wildcard $(ZSRC)/app/*.c) $(ZSRC)/port/host/hal_host.c
+CORE    = $(wildcard $(SHARED)/core/*.c)
+APP     = $(CORE) $(ZSRC)/port/host/hal_host.c host_ed25519.c
+
+
 
 .PHONY: all test clean
 all: test_crypto test_wallet protocol_bridge
@@ -25,10 +33,17 @@ test_wallet: test_wallet.c $(CRYPTO) $(APP)
 	$(CC) $(CFLAGS) -o $@ test_wallet.c $(CRYPTO) $(APP)
 
 # SDK 적합성 테스트(sdk/test/conformance.test.js)가 자식 프로세스로 띄운다.
+#
+# 예전에는 브리지가 둘이었다 — 같은 프로토콜의 구현이 둘이었기 때문이다.
+# 지금은 Arduino 와 Zephyr 가 같은 코어(nuwallet/src/core)를 컴파일하므로
+# 갈라질 수가 없다. 브리지도 하나로 줄였다.
 protocol_bridge: protocol_bridge.c $(CRYPTO) $(APP)
 	$(CC) $(CFLAGS) -o $@ protocol_bridge.c $(CRYPTO) $(APP)
 
-test: test_crypto test_wallet
+
+# 브리지는 SDK 쪽(sdk/test/conformance.test.js)에서 돌리므로 여기서는 빌드만
+# 되는지까지 본다. 빌드가 깨지면 적합성 테스트가 통째로 못 돈다.
+test: test_crypto test_wallet protocol_bridge
 	./test_crypto
 	./test_wallet
 

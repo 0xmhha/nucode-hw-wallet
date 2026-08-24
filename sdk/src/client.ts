@@ -77,16 +77,25 @@ export class NuWallet {
     return decodeWords(p);
   }
 
-  /** 사용자가 백업했음을 확인하고 저장한다. 첫 주소를 돌려준다. */
-  async confirmSetup(words: number[]): Promise<string> {
-    const p = await this.cmd(CMD.SETUP_CONFIRM, encodeWords(words));
-    return toChecksumAddress(hex(p.subarray(0, 20)));
+  /**
+   * 사용자가 백업했음을 확인하고 저장한다.
+   *
+   * v2 부터 여기서 바로 저장되지 않는다. 기기가 **PIN 설정 절차**를 시작하고,
+   * 사용자가 버튼으로 6자리를 두 번 누른 뒤에야 봉인·저장된다. PIN 없이 저장하면
+   * 봉인 키가 공개값이 되어 플래시만 뜨면 열리기 때문이다.
+   *
+   * 끝나면 지갑은 잠금 해제 상태이고, 주소는 이어서 조회해 돌려준다.
+   */
+  async confirmSetup(words: number[], opts: SignOptions = {}): Promise<string> {
+    await this.setupCommand(CMD.SETUP_CONFIRM, encodeWords(words), opts);
+    return this.getAddress('ethereum');
   }
 
-  /** 기존 니모닉으로 복구한다. BIP-39 체크섬을 기기가 검증한다. */
-  async restore(words: number[]): Promise<string> {
-    const p = await this.cmd(CMD.SETUP_RESTORE, encodeWords(words));
-    return toChecksumAddress(hex(p.subarray(0, 20)));
+  /** 기존 니모닉으로 복구한다. BIP-39 체크섬을 기기가 검증한다.
+   *  confirmSetup 과 마찬가지로 PIN 설정을 거친다. */
+  async restore(words: number[], opts: SignOptions = {}): Promise<string> {
+    await this.setupCommand(CMD.SETUP_RESTORE, encodeWords(words), opts);
+    return this.getAddress('ethereum');
   }
 
   /** 지갑을 지운다. 기기에서 버튼 승인이 필요하다. */
@@ -178,6 +187,27 @@ export class NuWallet {
   }
 
   /**
+   * 셋업 계열. 기기가 PENDING 을 주고, 사용자가 버튼으로 PIN 을 정한 뒤에야
+   * 봉인·저장된다.
+   *
+   * v1 펌웨어는 이 자리에서 OK 를 주고 **PIN 없이** 저장했다. 그 레코드는
+   * 봉인 키가 `PBKDF2("", salt)` 이고 salt 가 평문이라 플래시만 뜨면 열린다.
+   * 조용히 받아주면 사용자는 잠긴 줄 알지만 잠기지 않은 지갑을 갖게 되므로,
+   * 분명한 오류를 낸다.
+   */
+  private async setupCommand(cmd: number, payload: Uint8Array,
+                             opts: SignOptions): Promise<void> {
+    const first = await this.transport.send(cmd, payload);
+    if (first.status === SW.OK) {
+      throw new WalletError(SW.DEVICE_ERROR,
+        '펌웨어가 낡았습니다 (프로토콜 v1). 이 펌웨어는 PIN 없이 지갑을 저장하며, ' +
+        '그 저장은 암호화된 것이 아닙니다. 보드에 최신 펌웨어를 올린 뒤 다시 하세요.');
+    }
+    if (first.status !== SW.PENDING) throw new WalletError(first.status);
+    await this.awaitApproval(first.payload, opts);
+  }
+
+  /**
    * PENDING 을 받고 이벤트로 결과를 기다리는 명령의 공통 흐름.
    * docs/protocol.md §7 참고.
    */
@@ -185,8 +215,14 @@ export class NuWallet {
                                opts: SignOptions): Promise<Uint8Array> {
     const first = await this.transport.send(cmd, payload);
     if (first.status !== SW.PENDING) throw new WalletError(first.status);
-    if (first.payload.length < 4) throw new WalletError(SW.DEVICE_ERROR, 'requestId 없음');
-    const dv = new DataView(first.payload.buffer, first.payload.byteOffset, first.payload.byteLength);
+    return this.awaitApproval(first.payload, opts);
+  }
+
+  /** PENDING 응답을 받은 뒤, 기기가 결과 이벤트를 보낼 때까지 기다린다. */
+  private async awaitApproval(firstPayload: Uint8Array,
+                              opts: SignOptions): Promise<Uint8Array> {
+    if (firstPayload.length < 4) throw new WalletError(SW.DEVICE_ERROR, 'requestId 없음');
+    const dv = new DataView(firstPayload.buffer, firstPayload.byteOffset, firstPayload.byteLength);
     const requestId = dv.getUint32(0, false);
 
     const timeoutMs = opts.timeoutMs ?? DEFAULT_SIGN_TIMEOUT;
@@ -218,13 +254,21 @@ export class NuWallet {
         if (edv.getUint32(0, false) !== requestId) return;
 
         if (e.evt === EVT.CHALLENGE_STARTED && p.length >= 6) {
-          opts.onStart?.({ requestId, steps: p[4]!, command: p[5]! });
+          opts.onStart?.({
+            requestId, steps: p[4]!, command: p[5]!,
+            kind: p.length >= 7 ? p[6]! : 0,
+          });
         } else if (e.evt === EVT.CHALLENGE_PROGRESS && p.length >= 6) {
           opts.onProgress?.({ requestId, step: p[4]!, attemptsLeft: p[5]! });
         } else if (e.evt === EVT.SIGN_RESULT && p.length >= 6) {
           const status = edv.getUint16(4, false);
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(p.subarray(6)));
+        } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
+          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다. */
+          const status = edv.getUint16(5, false);
+          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
+          else finish(() => resolve(new Uint8Array()));
         } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
           // WIPE 처럼 서명이 아닌 승인 요청의 결과. 돌려줄 페이로드가 없다.
           // 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6.

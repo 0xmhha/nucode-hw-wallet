@@ -17,6 +17,12 @@ uint32_t nu_rd32(const uint8_t *p) {
            ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
 }
 
+uint32_t nu_elapsed(uint32_t now, uint32_t since) {
+    const uint32_t d = now - since;
+    /* 절반 이상 벌어졌으면 뒤로 간 것으로 본다 — 실제로 49일이 지났을 리 없다. */
+    return (d > 0x7FFFFFFFu) ? 0u : d;
+}
+
 void nu_leds(nu_wallet *w, uint8_t mask) {
     if (mask == w->led_mask) return;
     w->led_mask = mask;

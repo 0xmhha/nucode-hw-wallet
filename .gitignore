@@ -47,17 +47,17 @@ next-env.d.ts
 /firmware/build/*
 # 설치 문서(docs/nu40-dk-firmware-installation.md)가 이 파일을 가리키므로 예외
 !/firmware/build/NU40PET.UF2
-/firmware/zephyr/build/
-/firmware/test/test_crypto
-/firmware/test/test_wallet
+/firmware/wallet/build/
 
-# 호스트 테스트 바이너리 (make 로 언제든 다시 만든다)
+# 호스트 테스트 바이너리와 중간 산출물 (make 로 언제든 다시 만든다)
 /firmware/test/test_crypto
 /firmware/test/test_wallet
 /firmware/test/protocol_bridge
+/firmware/test/.obj/
 
 # 펌웨어 빌드 산출물 — 이미 히스토리에 7MB 가량 들어가 있다.
-# .uf2 는 배포용이라 남기고, elf/map/hex/zip 은 언제든 다시 만든다.
+# 보드에 올리는 .uf2 만 남긴다. 설치 문서가 이 파일을 가리키고, 툴체인 없이
+# 굽는 유일한 경로다. elf/map/hex/zip 은 언제든 다시 만든다.
 /firmware/nuwallet/build/*
 !/firmware/nuwallet/build/*.uf2
 !/firmware/nuwallet/build/*.UF2

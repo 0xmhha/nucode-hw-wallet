@@ -12,7 +12,7 @@
 """
 import re, sys
 
-FW  = open('firmware/zephyr/src/app/protocol.h', encoding='utf-8').read()
+FW  = open('firmware/nuwallet/src/core/protocol.h', encoding='utf-8').read()
 SDK = open('sdk/src/protocol.ts', encoding='utf-8').read()
 DOC = open('docs/protocol.md', encoding='utf-8').read()
 

@@ -7,7 +7,7 @@
  *  - 난수: xorshift. 결정론적이라 테스트가 재현된다. 실기기에서 쓰면 안 된다.
  *  - 시간: 테스트가 직접 밀어 준다
  *  - 송신: 링 버퍼에 쌓아 두고 테스트가 꺼내 본다                          */
-#include "../../app/hal.h"
+#include "core/hal.h"
 
 #define NU_HOST_OUT_MAX 32
 #define NU_HOST_MSG_MAX 300
@@ -24,6 +24,8 @@ typedef struct {
     uint32_t now;
     uint32_t rng;
     uint8_t  leds;
+    uint8_t  btn_held;                 /* 지금 눌려 있는 버튼 마스크 (공장 초기화용) */
+    int      bonds_erased;             /* 공장 초기화가 본딩을 지웠는지 확인용 */
     int      rng_fail;                 /* 1 이면 난수 실패를 흉내낸다 */
     nu_host_msg out[NU_HOST_OUT_MAX];
     int      out_n;

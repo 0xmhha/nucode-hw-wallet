@@ -2,11 +2,12 @@
 #ifndef NUWALLET_BLE_TRANSPORT_H
 #define NUWALLET_BLE_TRANSPORT_H
 #include <stdint.h>
+#include "../core/wallet.h"
 
 /* NuWallet GATT 서비스 + 프레이밍.
  * UUID 와 프레이밍은 docs/protocol.md §1, §2 참고. */
 
-void nuble_begin(const char *device_name);
+void nuble_begin(const char *device_name, nu_wallet *w);
 void nuble_task(void);
 int  nuble_connected(void);
 int  nuble_paired(void);

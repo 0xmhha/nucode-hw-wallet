@@ -1,92 +1,37 @@
 // ============================================================================
-//  NuWallet — NU40-DK BLE 하드웨어 지갑 (Ethereum)
+//  NuWallet — NU40-DK BLE 하드웨어 지갑 (Ethereum · Solana)
 //
 //  ⚠️  실제 자금을 넣지 마세요. SECURITY.md 를 먼저 읽으세요.
 //      nRF52840 에는 보안 요소가 없고 기기에 화면이 없습니다.
 //
-//  버튼 4개로 서명을 승인합니다. 기기가 랜덤 시퀀스를 LED 로 보여주고
-//  사용자가 그대로 누릅니다. 시퀀스는 BLE 로 절대 나가지 않습니다.
+//  지갑 로직은 전부 src/core/ 에 있습니다. 그쪽은 Arduino 도 Zephyr 도 모르고
+//  src/core/hal.h 만 압니다 — 그래서 같은 코드가 보드와 호스트 테스트에서
+//  똑같이 돕니다 (firmware/test).
 //
-//  빌드:  make build      업로드: make upload
-//  FQBN:  nucode:nrf52:nu40dk
+//  이 스케치가 하는 일은 셋뿐입니다.
+//    1. HAL 과 BLE 를 올린다
+//    2. 버튼과 BLE 요청을 코어에 넘긴다
+//    3. 코어를 틱 시킨다 (타임아웃 · LED · 세션 유휴 · 공장 초기화)
+//
+//  코어는 **오직 loop() 에서만** 실행됩니다. 재진입을 가정하지 않기도 하고,
+//  BIP-32 파생과 PBKDF2 가 2KB 넘는 스택을 쓰기 때문이기도 합니다 — BLE 콜백
+//  스택에서 부르면 넘칩니다.
+//
+//  빌드:  arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir ./build .
 // ============================================================================
 
 #include <Arduino.h>
 #include <bluefruit.h>
 #include <Adafruit_nRFCrypto.h>
-#include <Adafruit_LittleFS.h>
-#include <InternalFileSystem.h>
 
 #include "config.h"
-#include "src/controller/protocol.h"
+#include "src/core/wallet.h"
+#include "src/port/arduino/hal_arduino.h"
 #include "src/transport/ble_transport.h"
-#include "src/storage/keystore.h"
-#include "src/ui/challenge.h"
 
-static challenge_t CH;
-static char g_name[24];
-
-// ── 하드웨어 헬퍼 ────────────────────────────────────────────────────────────
-static const uint8_t LEDS[4] = { LED_1, LED_2, LED_3, LED_4 };
-static const uint8_t BTNS[4] = { BTN_1, BTN_2, BTN_3, BTN_4 };
-
-static void led(uint8_t i, bool on);
-static void buttons_begin();
-static int buttons_poll(uint32_t now);
- extern "C" void nuwallet_rng(uint8_t *buf, uint16_t len);
- extern "C" const char * nuwallet_device_name(void);
- extern "C" void nuwallet_request_challenge(uint32_t request_id, uint8_t cmd);
-static void make_name();
-void setup();
-void loop();
-static void led(uint8_t i, bool on) {
-#if LED_INVERT
-  on = !on;
-#endif
-  on ? ledOn(LEDS[i]) : ledOff(LEDS[i]);
-}
-
-struct Btn { bool raw, stable; uint32_t at; };
-static Btn B[4];
-
-static void buttons_begin() {
-  for (int i = 0; i < 4; i++) {
-    pinMode(BTNS[i], INPUT_PULLUP);
-    B[i].raw = B[i].stable = (digitalRead(BTNS[i]) == LOW);
-    B[i].at = millis();
-  }
-}
-
-// 눌림 엣지가 있으면 그 버튼 번호를, 없으면 -1 을 반환한다.
-static int buttons_poll(uint32_t now) {
-  int edge = -1;
-  for (int i = 0; i < 4; i++) {
-    const bool r = (digitalRead(BTNS[i]) == LOW);
-    if (r != B[i].raw) { B[i].raw = r; B[i].at = now; continue; }
-    if (B[i].stable != B[i].raw && (now - B[i].at) >= BTN_DEBOUNCE_MS) {
-      B[i].stable = B[i].raw;
-      if (B[i].stable) edge = i;
-    }
-  }
-  return edge;
-}
-
-// ── 프로토콜 계층이 부르는 콜백 ──────────────────────────────────────────────
-extern "C" void nuwallet_rng(uint8_t *buf, uint16_t len) {
-  // CC310 TRNG. 니모닉 엔트로피와 관리 작업 챌린지에 쓴다.
-  nRFCrypto.Random.generate(buf, len);
-}
-
-extern "C" const char *nuwallet_device_name(void) { return g_name; }
-
-extern "C" void nuwallet_request_challenge(uint32_t request_id, uint8_t cmd) {
-  ch_start(&CH, request_id, cmd, CH_STEPS_DEFAULT);
-  proto_emit_challenge_started(request_id, CH.steps, cmd);
-#if DEBUG_LOG
-  Serial.print(F("[ch] 시작 req=")); Serial.print(request_id);
-  Serial.print(F(" cmd=0x")); Serial.println(cmd, HEX);
-#endif
-}
+static nu_hal    HAL;
+static nu_wallet W;
+static char      g_name[24];
 
 // ── 기기 이름 ────────────────────────────────────────────────────────────────
 // DEVICEID 로 보드마다 고유하게, 재부팅해도 동일하게.
@@ -106,84 +51,57 @@ static void make_name() {
   snprintf(g_name, sizeof g_name, "%s%s", BLE_NAME_PREFIX, sfx);
 }
 
+// 코어의 hal->send 가 이걸 부른다. 프레이밍은 전송 계층이 한다.
+static void hal_send(uint8_t tag, const uint8_t *msg, size_t len, void *ctx) {
+  (void)ctx;
+  nuble_send(tag, msg, (uint16_t)len);
+}
+
 // ============================================================================
 void setup() {
-  for (int i = 0; i < 4; i++) { pinMode(LEDS[i], OUTPUT); led(i, false); }
-  buttons_begin();
-
   Serial.begin(CONSOLE_BAUD);
   make_name();
 
-  // CryptoCell은 한 번 초기화한 뒤 TRNG와 Ed25519가 함께 사용한다.
+  // CryptoCell 은 한 번 초기화한 뒤 TRNG 와 Ed25519 가 함께 쓴다.
   nRFCrypto.begin();
 
-  keystore_begin();
-  ch_init(&CH, nuwallet_rng);
-  proto_init(nuble_send);
-  nuble_begin(g_name);
+  if (nu_arduino_hal_init(&HAL)) {
+#if DEBUG_LOG
+    Serial.println(F("HAL 초기화 실패 — 멈춥니다"));
+#endif
+    for (;;) delay(1000);
+  }
+  HAL.send = hal_send;
+
+  nu_wallet_init(&W, &HAL, g_name);
+  nuble_begin(g_name, &W);
 
 #if DEBUG_LOG
   Serial.println();
   Serial.println(F("=== NuWallet ==="));
   Serial.print(F("기기 이름   ")); Serial.println(g_name);
-  Serial.print(F("초기화됨    ")); Serial.println(keystore_is_initialized() ? F("예") : F("아니오"));
+  Serial.print(F("초기화됨    "));
+  Serial.println((nu_wallet_flags(&W) & NU_FLAG_INITIALIZED) ? F("예") : F("아니오"));
   Serial.println(F("⚠️  프로토타입입니다. 실제 자금을 넣지 마세요. SECURITY.md 참고."));
 #endif
-
-  // 초기화 전에는 LED1 을 켜 둔다 (셋업 필요 표시)
-  led(0, !keystore_is_initialized());
 }
 
 void loop() {
   const uint32_t now = millis();
 
-  // 버튼 -> 챌린지
-  const int edge = buttons_poll(now);
-  if (edge >= 0 && CH.state != CH_IDLE) {
-    if (ch_button(&CH, (uint8_t)edge)) {
-      proto_emit_challenge_progress(CH.request_id, CH.pos, CH.attempts_left);
-    }
-  }
+  // 버튼 — 눌림 엣지 하나를 코어에 넘긴다. 공장 초기화의 "붙잡고 있음" 은
+  // 코어가 HAL 의 buttons() 로 직접 본다.
+  const int edge = nu_arduino_poll_button(now);
+  if (edge >= 0) nu_wallet_button(&W, (uint8_t)edge);
 
-  // 챌린지 진행 + LED 표시
-  uint8_t want[4] = {0,0,0,0};
-  ch_task(&CH, now, want);
-
-  switch (CH.state) {
-    case CH_APPROVED:
-#if DEBUG_LOG
-      Serial.println(F("[ch] 승인됨 — 서명 진행"));
-#endif
-      proto_execute_pending();
-      ch_cancel(&CH);
-      break;
-    case CH_REJECTED:
-#if DEBUG_LOG
-      Serial.println(F("[ch] 거부됨 — 시도 횟수 소진"));
-#endif
-      proto_challenge_resolved(CH.request_id, SW_CHALLENGE_FAILED);
-      ch_cancel(&CH);
-      break;
-    case CH_TIMEOUT:
-#if DEBUG_LOG
-      Serial.println(F("[ch] 시간 초과"));
-#endif
-      proto_challenge_resolved(CH.request_id, SW_CHALLENGE_TIMEOUT);
-      ch_cancel(&CH);
-      break;
-    default:
-      break;
-  }
-
-  // LED: 챌린지 중이면 챌린지가 우선, 아니면 상태 표시
-  if (CH.state == CH_SHOWING || CH.state == CH_WAITING) {
-    for (int i = 0; i < 4; i++) led(i, want[i]);
-  } else {
-    led(0, !keystore_is_initialized());               // 셋업 필요
-    led(1, nuble_connected());                        // 연결됨
-    led(2, nuble_paired());                           // 본딩됨
-    led(3, false);
-  }
-
+  // BLE 요청 — 조립은 콜백에서 끝났고, 실행은 여기(메인 스택)에서 한다.
   nuble_task();
+
+  /* 타임아웃 · LED · 세션 유휴 · 공장 초기화 카운트다운.
+   *
+   * 위에서 캐시한 now 가 아니라 **지금** 시각을 넘긴다. 사이에 들어간
+   * nuble_task() 가 PBKDF2 를 돌리면 몇 초가 지나 있고, 캐시한 값을 넘기면
+   * 코어가 "시간이 뒤로 갔다" 를 보게 된다. 코어도 nu_elapsed() 로 방어하지만
+   * 애초에 어긋난 값을 주지 않는 것이 맞다. */
+  nu_wallet_tick(&W, millis());
 }

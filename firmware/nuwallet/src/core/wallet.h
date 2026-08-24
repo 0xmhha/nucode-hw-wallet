@@ -16,18 +16,24 @@ typedef struct {
     uint8_t  cmd;                    /* 0 이면 진행 중인 요청 없음 */
     uint32_t id;
     uint8_t  kind;                   /* 0 = 랜덤 챌린지, 1 = PIN 입력 */
-    uint8_t  seq[NU_PIN_MAX];        /* kind 0: 기대 시퀀스 / kind 1: 입력 버퍼 */
+    uint8_t  seq[NU_PIN_LEN];        /* CONFIRM: 기대 버튼 / PIN·PIN_NEW: 입력 버퍼 */
+    uint8_t  first[NU_PIN_LEN];      /* PIN_NEW 1차 입력. 2차와 비교한다 */
+    uint8_t  stage;                  /* PIN_NEW: 0 = 1차 입력, 1 = 재입력 */
     uint8_t  seq_len, pos, attempts;
     uint32_t started_ms, phase_ms;
     uint8_t  shown;                  /* LED 로 보여준 단계 수 */
     uint8_t  showing;                /* 1 이면 아직 시퀀스 표시 중 */
 
-    uint8_t  hash[32];               /* 서명 대상 */
+    uint8_t  hash[32];               /* secp256k1 서명 대상 (미리 해시해 둔다) */
     uint32_t path[8];
     uint8_t  depth;
+    uint8_t  chain;                  /* NU_CHAIN_* — 어느 곡선으로 서명할지 */
 
-    uint8_t  new_pin[NU_PIN_MAX];    /* SET_PIN */
-    uint8_t  new_pin_len;
+    /* Ed25519 는 원문을 그대로 서명한다 (내부에서 해시한다). 그래서 해시가
+     * 아니라 페이로드를 들고 있어야 한다. Solana 트랜잭션 최대 크기다. */
+    uint8_t  payload[NU_MAX_SIGN_PAYLOAD];
+    uint16_t payload_len;
+
 
     char     passphrase[NU_MAX_PASSPHRASE + 1];  /* UNLOCK */
 } nu_request;
@@ -43,12 +49,15 @@ typedef struct {
     uint8_t  seed[64];
     uint16_t words[24];              /* 잠금 해제 상태에서만 유효. 재봉인에 필요 */
     uint8_t  word_count;
-    uint8_t  pin[NU_PIN_MAX];
+    uint8_t  pin[NU_PIN_LEN];
     uint8_t  pin_len;
     uint8_t  pin_attempts;           /* 남은 PIN 시도 */
 
     uint16_t tmp_words[24];          /* SETUP_GENERATE 후 CONFIRM 전 */
     uint8_t  tmp_count;
+
+    uint16_t words_pending[24];      /* CONFIRM/RESTORE 후, PIN 설정을 기다리는 중 */
+    uint8_t  words_pending_count;
 
     nu_request req;
 
@@ -59,6 +68,12 @@ typedef struct {
 
     uint32_t next_id;
     uint8_t  led_mask;
+
+    uint32_t last_active_ms;
+    uint32_t lock_now, lock_last;    /* 임시 계측 — 제거할 것 */         /* 세션 유휴 시계 — B2 세션을 닫는 기준 */
+    uint32_t fac_hold_ms;            /* 공장 초기화: 두 버튼을 붙잡기 시작한 시각 */
+    uint8_t  fac_stage;              /* 0 유휴, 1 카운트다운 중, 2 확인 대기 */
+    uint8_t  fac_pos;                /* 확인 시퀀스에서 맞게 누른 개수 */
 } nu_wallet;
 
 /* 부팅 시 한 번. 플래시에서 레코드를 읽어 들인다. */

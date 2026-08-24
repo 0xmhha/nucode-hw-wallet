@@ -86,10 +86,10 @@ export default function SetupPage() {
   });
 
   const unlock = () => run('잠금 해제', async () => {
-    const addr = await admin.unlock(passphrase, approvalCbs('pin'));
-    if (addr) setAddress(addr);
+    await admin.unlock(passphrase, approvalCbs('pin'));
     await refresh();
-    setStatus(addr ? `잠금 해제됨 — ${addr}` : '잠금 해제됨');
+    setAddress(await wallet.getAddress('ethereum'));
+    setStatus('잠금 해제됨');
   });
 
   const lock = () => run('잠금', async () => {
@@ -101,35 +101,25 @@ export default function SetupPage() {
 
   const importMnemonic = () => run('니모닉 가져오기', async () => {
     const indices = mnemonicToIndices(mnemonic);     // 체크섬은 보드가 검증한다
-    const addr = await wallet.restore(indices);
+    // 보드가 이어서 PIN 설정을 요구한다 — 6자리를 두 번 누른다.
+    const addr = await wallet.restore(indices, approvalCbs('pin'));
     setAddress(addr);
     setMnemonic('');
     await refresh();
     setStatus(`복구 완료 — ${addr}`);
   });
 
-  const savePin = () => run('PIN 설정', async () => {
-    if (pin.length < PIN.MIN) throw new Error(`${PIN.MIN}자리 이상이어야 합니다.`);
-    if (!confirming) {
-      setConfirming(true);
-      setPinConfirm([]);
-      setStatus('확인을 위해 같은 조합을 한 번 더 누르세요.');
-      return;
-    }
-    if (pin.join() !== pinConfirm.join()) {
-      setConfirming(false); setPin([]); setPinConfirm([]);
-      throw new Error('두 번 입력한 값이 다릅니다. 처음부터 다시 하세요.');
-    }
-    await admin.setPin(pin, approvalCbs('challenge'));
-    setPin([]); setPinConfirm([]); setConfirming(false);
+  /* PIN 은 이 화면에서 입력하지 않는다.
+   *
+   * 값을 웹에서 받아 보내면 호스트가 PIN 을 알게 되는데, PIN 의 목적이
+   * "호스트가 감염돼도 기기를 못 연다" 이므로 앞뒤가 맞지 않는다. v2 부터
+   * 사용자는 보드의 버튼으로 6자리를 두 번 누른다. 여기서는 절차를 시작시키고
+   * 진행 상황만 보여준다. */
+  const changePin = () => run('PIN 변경', async () => {
+    setStatus('보드에서 새 PIN 6자리를 누르고, 같은 값을 한 번 더 누르세요.');
+    await admin.changePin(approvalCbs('pin'));
     await refresh();
-    setStatus('PIN 을 저장했습니다. 다음 연결부터 잠금 해제에 필요합니다.');
-  });
-
-  const clearPin = () => run('PIN 제거', async () => {
-    await admin.clearPin(approvalCbs('challenge'));
-    await refresh();
-    setStatus('PIN 을 제거했습니다. 이제 잠금 없이 열립니다.');
+    setStatus('PIN 을 바꿨습니다.');
   });
 
   const wipe = () => run('초기화', async () => {
@@ -139,11 +129,6 @@ export default function SetupPage() {
     await refresh();
     setStatus('보드를 초기화했습니다.');
   });
-
-  const entry = confirming ? pinConfirm : pin;
-  const setEntry = confirming ? setPinConfirm : setPin;
-  const press = (b: number) => { if (entry.length < PIN.MAX) setEntry([...entry, b]); };
-  const backspace = () => setEntry(entry.slice(0, -1));
 
   const locked = !!state?.locked;
   const words = mnemonic.trim() ? mnemonic.trim().split(/\s+/u).length : 0;
@@ -230,35 +215,34 @@ export default function SetupPage() {
         </section>
 
         <section className={s.card}>
-          <h2>PIN 설정 · 버튼 4개 조합</h2>
+          <h2>PIN · 버튼 6번</h2>
           <p className={s.hint}>
-            {PIN.MIN}~{PIN.MAX} 자리. 아래 패드는 보드의 버튼 1~4 에 대응합니다.
-            저장하려면 보드에서 <strong>랜덤 챌린지</strong>를 한 번 통과해야 합니다.
+            PIN 은 <strong>보드에서만</strong> 입력합니다. 이 화면은 값을 받지 않습니다 —
+            웹이 PIN 을 알면 &ldquo;호스트가 감염돼도 기기를 못 연다&rdquo;는 목적이 무너지기 때문입니다.
+            아래 패드는 보드의 버튼 배치를 보여줄 뿐, 누르는 곳은 보드입니다.
           </p>
-          <div className={s.pinDots}>
-            {entry.length === 0
-              ? <span className={s.pinEmpty}>{confirming ? '확인용으로 다시 누르세요' : '아직 입력 없음'}</span>
-              : entry.map((_, i) => <span key={i} className={s.pinDot} />)}
-          </div>
           <div className={s.pad}>
             {BUTTON_LABELS.map((label, i) => (
-              <button key={label} type="button" className={s.key} onClick={() => press(i)}
-                      disabled={busy || !connected} aria-label={`버튼 ${label}`}>
+              <div key={label} className={s.key} aria-hidden="true">
                 {label}<small>SW{i}</small>
-              </button>
+              </div>
             ))}
           </div>
+          <p className={s.hint}>
+            PIN 은 {PIN.LEN}자리 고정입니다. 바꿀 때는 보드에서 새 값을 누르고, 오타를 잡기 위해
+            같은 값을 한 번 더 누릅니다. PIN 은 없앨 수 없습니다.
+          </p>
           <div className={s.buttons}>
-            <button className={s.btn} onClick={backspace} disabled={busy || entry.length === 0}>지우기</button>
-            <button className={`${s.btn} ${s.primary}`} onClick={savePin}
-                    disabled={busy || !connected || locked || !state?.initialized || entry.length < PIN.MIN}>
-              {confirming ? 'PIN 저장' : '다음 (확인 입력)'}
-            </button>
-            <button className={s.btn} onClick={clearPin}
-                    disabled={busy || !connected || locked || !state?.hasPin}>
-              PIN 제거
+            <button className={`${s.btn} ${s.primary}`} onClick={changePin}
+                    disabled={busy || !connected || locked || !state?.initialized}>
+              PIN 변경
             </button>
           </div>
+          <p className={s.hint}>
+            PIN 을 잊었다면 보드에서 <strong>공장 초기화</strong>를 합니다 — 버튼 1과 4를 5초 동안
+            함께 누른 뒤, LED 카운트다운이 끝나면 손을 떼고 버튼 2 → 3 을 누릅니다.
+            지갑과 페어링 정보가 지워지며, 복구 문구로만 되살릴 수 있습니다.
+          </p>
         </section>
 
         <section className={s.card}>

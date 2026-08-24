@@ -25,7 +25,9 @@ export interface AccountInfo {
 /** 기기가 서명을 승인받는 동안 SDK 가 호출하는 콜백. */
 export interface ChallengeCallbacks {
   /** 기기가 LED 로 시퀀스를 표시하기 시작했다. steps 는 눌러야 하는 횟수. */
-  onStart?: (info: { requestId: number; steps: number; command: number }) => void;
+  /** 기기가 승인 절차를 시작했다. `kind` 는 APPROVAL.* — 무엇을 띄울지 결정한다. */
+  onStart?: (info: { requestId: number; steps: number; command: number;
+                     kind: number }) => void;
   /** 사용자가 한 단계 맞게 눌렀다. */
   onProgress?: (info: { requestId: number; step: number; attemptsLeft: number }) => void;
 }

@@ -1,6 +1,6 @@
 #include "store.h"
-#include "crypto/hmac.h"
-#include "crypto/sha2.h"
+#include "../crypto/hmac.h"
+#include "../crypto/sha2.h"
 #include <string.h>
 
 #define KDF_ITERS 4096
@@ -49,7 +49,7 @@ int nu_store_valid(const uint8_t *raw, size_t len) {
         raw[2] != NU_STORE_MAGIC2 || raw[3] != NU_STORE_MAGIC3) return 0;
     if (raw[4] != NU_STORE_VERSION) return 0;
     if (!count_ok(raw[7])) return 0;
-    if (raw[6] > NU_PIN_MAX) return 0;
+    if (raw[6] > NU_PIN_LEN) return 0;
     if (len < (size_t)NU_STORE_OFF_CT + (size_t)raw[7] * 2) return 0;
     return 1;
 }
@@ -93,7 +93,7 @@ int nu_store_seal(const nu_hal *hal,
                   const uint16_t *words, uint8_t count,
                   const uint8_t *pin, uint8_t pin_len,
                   uint8_t *raw_out, size_t *raw_len_out) {
-    if (!count_ok(count) || pin_len > NU_PIN_MAX) return 0;
+    if (!count_ok(count) || pin_len > NU_PIN_LEN) return 0;
     const size_t ct_len = (size_t)count * 2;
     const size_t total = NU_STORE_OFF_CT + ct_len;
 

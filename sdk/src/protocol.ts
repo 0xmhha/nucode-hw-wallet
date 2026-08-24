@@ -9,7 +9,7 @@ export const SERVICE_UUID = '6e754000-7761-4c4c-4554-000000000001';
 export const RX_UUID      = '6e754000-7761-4c4c-4554-000000000002'; // 호스트 -> 기기
 export const TX_UUID      = '6e754000-7761-4c4c-4554-000000000003'; // 기기 -> 호스트
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const MAX_MESSAGE      = 2048;
 
 export const TAG = { MESSAGE: 0x05, EVENT: 0x06 } as const;
@@ -49,6 +49,7 @@ export const SW = {
   CHALLENGE_TIMEOUT:   0x6501,
   CHALLENGE_FAILED:    0x6502,
   PIN_REQUIRED:        0x6503,
+  PIN_MISMATCH:        0x6504,
   NOT_INITIALIZED:     0x6982,
   ALREADY_INITIALIZED: 0x6983,
   USER_REJECTED:       0x6985,
@@ -67,6 +68,7 @@ const SW_TEXT: Record<number, string> = {
   [SW.CHALLENGE_TIMEOUT]: '승인 시간이 초과되었습니다',
   [SW.CHALLENGE_FAILED]: '버튼 시퀀스가 틀렸습니다',
   [SW.PIN_REQUIRED]: 'PIN 이 설정되어 있습니다. 먼저 잠금을 해제하세요',
+  [SW.PIN_MISMATCH]: '두 번 입력한 PIN 이 다릅니다',
   [SW.NOT_INITIALIZED]: '지갑이 아직 생성되지 않았습니다',
   [SW.ALREADY_INITIALIZED]: '이미 지갑이 있습니다. 먼저 초기화하세요',
   [SW.USER_REJECTED]: '사용자가 거부했습니다',
@@ -266,5 +268,20 @@ export const FLAG = {
   HAS_PIN:          0x08,
 } as const;
 
-/** PIN 정책. docs/protocol.md §8 */
-export const PIN = { MIN: 4, MAX: 8, BUTTONS: 4 } as const;
+/** PIN 정책. docs/protocol.md §8 — v2 부터 길이가 6으로 고정이다. */
+export const PIN = { LEN: 6, BUTTONS: 4 } as const;
+
+/**
+ * 승인 종류. `EVT_CHALLENGE_STARTED` 의 KIND 바이트로 온다.
+ *
+ * 호스트가 무엇을 띄울지 스스로 추측하면 안 된다 — 기기가 알려준다.
+ */
+export const APPROVAL = {
+  /** 서명 확인 — 켜진 LED 하나를 1회 누른다. */
+  CONFIRM: 0,
+  /** PIN 입력 — 6회. LED 는 누른 개수만 보여준다. */
+  PIN: 1,
+  /** PIN 설정 — 6회 입력한 뒤 같은 값을 한 번 더. */
+  PIN_NEW: 2,
+} as const;
+export type ApprovalKind = typeof APPROVAL[keyof typeof APPROVAL];

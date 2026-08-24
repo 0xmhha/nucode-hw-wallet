@@ -14,7 +14,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "app/wallet.h"
+#include "core/wallet.h"
 #include "port/zephyr/hal_zephyr.h"
 #include "port/zephyr/ble.h"
 

@@ -8,10 +8,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../wallet/src/app/wallet.h"
-#include "../wallet/src/app/framing.h"
-#include "../wallet/src/app/rlp.h"
-#include "../wallet/src/app/store.h"
+#include "../nuwallet/src/core/wallet.h"
+#include "../nuwallet/src/core/framing.h"
+#include "../nuwallet/src/core/rlp.h"
+#include "../nuwallet/src/core/store.h"
 #include "../wallet/src/port/host/hal_host.h"
 #include "../nuwallet/src/crypto/keccak.h"
 #include "../nuwallet/src/crypto/bip32.h"
@@ -88,21 +88,42 @@ static const nu_host_msg *find_event(uint8_t evt) {
     return NULL;
 }
 
-/* LED 표시가 끝날 때까지 시간을 밀고, 코어가 들고 있는 시퀀스대로 눌러 준다. */
-static void approve_challenge(void) {
+/* 테스트가 사용자를 대신해 정하는 PIN. */
+static const uint8_t TEST_PIN[NU_PIN_LEN] = { 0, 3, 1, 2, 0, 1 };
+
+static void press_seq(const uint8_t *seq, uint8_t n) {
+    for (uint8_t i = 0; i < n; i++) nu_wallet_button(&W, seq[i]);
+}
+
+/* LED 표시가 끝날 때까지 시간을 민다. */
+static void settle_leds(void) {
     for (int i = 0; i < 400 && W.req.showing; i++) {
         H.now += 50;
         nu_wallet_tick(&W, H.now);
     }
-    uint8_t seq[NU_PIN_MAX];
+}
+
+/* 진행 중인 승인을 통과시킨다. v2 는 종류에 따라 누르는 것이 다르다. */
+static void approve_challenge(void) {
+    settle_leds();
+    if (W.req.kind == NU_APPROVAL_PIN_NEW) {
+        press_seq(TEST_PIN, NU_PIN_LEN);        /* 1차 */
+        press_seq(TEST_PIN, NU_PIN_LEN);        /* 재입력 */
+        return;
+    }
+    if (W.req.kind == NU_APPROVAL_PIN) {
+        press_seq(TEST_PIN, NU_PIN_LEN);
+        return;
+    }
+    uint8_t seq[NU_PIN_LEN];
     const uint8_t n = W.req.seq_len;
     memcpy(seq, W.req.seq, n);
-    for (uint8_t i = 0; i < n; i++) nu_wallet_button(&W, seq[i]);
+    press_seq(seq, n);
 }
 
 static void press_pin(const uint8_t *pin, uint8_t n) {
-    for (int i = 0; i < 400 && W.req.showing; i++) { H.now += 50; nu_wallet_tick(&W, H.now); }
-    for (uint8_t i = 0; i < n; i++) nu_wallet_button(&W, pin[i]);
+    settle_leds();
+    press_seq(pin, n);
 }
 
 /* 12단어 "abandon ... about" 의 워드 인덱스 (abandon=0, about=3). */
@@ -112,6 +133,19 @@ static void abandon_words(uint8_t *out, uint8_t *count) {
     out[1 + 11 * 2] = 0; out[2 + 11 * 2] = 3;
     *count = 12;
 }
+
+
+/* abandon x11 about 으로 지갑을 만든다. v2 는 이어서 PIN 을 받는다. */
+static void restore_abandon(void) {
+    uint8_t words[64]; uint8_t count;
+    abandon_words(words, &count);
+    request(NU_CMD_SETUP_RESTORE, words, 25);
+    approve_challenge();
+}
+
+/* CHAIN_PATH: [CHAIN=eth][DEPTH=5][m/44'/60'/0'/0/0] */
+#define ETH_PATH_REQ "\x01\x05\x80\x00\x00\x2c\x80\x00\x00\x3c\x80\x00\x00\x00" \
+                     "\x00\x00\x00\x00\x00\x00\x00\x00"
 
 /* ── 테스트 ─────────────────────────────────────────────────────────────── */
 
@@ -198,24 +232,24 @@ static void test_store(void) {
     boot(0xC0FFEE, 0);
     uint16_t words[24];
     for (int i = 0; i < 12; i++) words[i] = (uint16_t)(i * 37);
-    const uint8_t pin[4] = { 1, 2, 3, 0 };
+    const uint8_t pin[NU_PIN_LEN] = { 1, 2, 3, 0, 1, 2 };
 
     uint8_t raw[NU_STORE_MAX]; size_t raw_len = 0;
-    ok("봉인", nu_store_seal(&HAL, words, 12, pin, 4, raw, &raw_len));
+    ok("봉인", nu_store_seal(&HAL, words, 12, pin, NU_PIN_LEN, raw, &raw_len));
     ok("레코드 유효", nu_store_valid(raw, raw_len));
-    ok("PIN 길이 기록", nu_store_pin_len(raw) == 4);
+    ok("PIN 길이 기록", nu_store_pin_len(raw) == NU_PIN_LEN);
     ok("워드가 평문으로 남지 않는다",
        memcmp(raw + NU_STORE_OFF_CT, "\x00\x00\x00\x25", 4) != 0);
 
     uint16_t got[24]; uint8_t count = 0;
-    ok("맞는 PIN 으로 열림", nu_store_open(raw, raw_len, pin, 4, got, &count));
+    ok("맞는 PIN 으로 열림", nu_store_open(raw, raw_len, pin, NU_PIN_LEN, got, &count));
     ok("워드 복원", count == 12 && memcmp(got, words, 24) == 0);
 
-    const uint8_t bad[4] = { 1, 2, 3, 1 };
-    ok("틀린 PIN 거부", !nu_store_open(raw, raw_len, bad, 4, got, &count));
+    const uint8_t bad[NU_PIN_LEN] = { 1, 2, 3, 1, 1, 2 };
+    ok("틀린 PIN 거부", !nu_store_open(raw, raw_len, bad, NU_PIN_LEN, got, &count));
 
     raw[NU_STORE_OFF_CT] ^= 0xff;
-    ok("암호문 변조 감지", !nu_store_open(raw, raw_len, pin, 4, got, &count));
+    ok("암호문 변조 감지", !nu_store_open(raw, raw_len, pin, NU_PIN_LEN, got, &count));
 }
 
 static void test_lifecycle(void) {
@@ -249,9 +283,15 @@ static void test_lifecycle(void) {
     request(NU_CMD_SETUP_CONFIRM, wrong, 25);
     ok("틀린 백업 거부", last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
 
-    /* 제대로 확정 */
+    /* 제대로 확정 — v2 는 여기서 바로 저장하지 않고 PIN 을 받는다.
+     * PIN 없이 저장하면 봉인 키가 PBKDF2("", salt) 라서 플래시만 뜨면 열린다. */
     request(NU_CMD_SETUP_CONFIRM, gen, 25);
-    ok("SETUP_CONFIRM OK", last_response(&status, &p, &len) && status == NU_SW_OK && len == 20);
+    ok("SETUP_CONFIRM 은 PIN 을 요구한다",
+       last_response(&status, &p, &len) && status == NU_SW_PENDING && len == 4);
+    ok("승인 종류가 PIN 설정", W.req.kind == NU_APPROVAL_PIN_NEW);
+    approve_challenge();
+    ok("PIN 설정 후 저장됨", W.rec_len > 0 && W.unlocked);
+    ok("PIN 길이 6 고정", nu_store_pin_len(W.rec) == NU_PIN_LEN);
 
     /* 이미 있으면 다시 못 만든다 */
     request(NU_CMD_SETUP_GENERATE, strength, 1);
@@ -262,8 +302,13 @@ static void test_lifecycle(void) {
     uint8_t restore[64]; uint8_t count;
     abandon_words(restore, &count);
     request(NU_CMD_SETUP_RESTORE, restore, 25);
-    ok("SETUP_RESTORE OK", last_response(&status, &p, &len) && status == NU_SW_OK);
+    ok("SETUP_RESTORE 는 PIN 을 요구한다",
+       last_response(&status, &p, &len) && status == NU_SW_PENDING);
+    approve_challenge();
+    ok("복구 후 잠금 해제 상태", W.unlocked);
     /* 널리 알려진 값: abandon x11 about, 패스프레이즈 없음, m/44'/60'/0'/0/0 */
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("주소 조회 OK", last_response(&status, &p, &len) && status == NU_SW_OK);
     check_hex("기본 경로 주소", p, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
 
     /* 체크섬이 틀린 니모닉은 거부 */
@@ -280,6 +325,7 @@ static void test_lifecycle(void) {
     abandon_words(restore, &count);
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
+    approve_challenge();   /* v2: 셋업이 PIN 을 요구한다 */
 
     /* CHAIN_PATH = [CHAIN][DEPTH][PATH...]  — docs/protocol.md §3.5 */
     uint8_t path_req[22] = { NU_CHAIN_ETHEREUM, 5,
@@ -310,9 +356,9 @@ static void test_lifecycle(void) {
                             ((uint32_t)p[2] << 8) | p[3];
     const nu_host_msg *ev = find_event(NU_EVT_CHALLENGE_STARTED);
     ok("CHALLENGE_STARTED 이벤트", ev != NULL);
-    ok("STEPS = 4", ev && ev->data[7] == NU_CHALLENGE_STEPS);
+    ok("STEPS = 1 (v2: 확인 1회)", ev && ev->data[7] == NU_CONFIRM_STEPS);
     ok("승인 대상 CMD 전달", ev && ev->data[8] == NU_CMD_SIGN_TX);
-    ok("시퀀스는 BLE 로 나가지 않는다", ev && ev->len == 3 + 6);
+    ok("시퀀스는 BLE 로 나가지 않는다", ev && ev->len == 3 + 7);
 
     /* 승인 중에는 새 요청을 안 받는다 */
     nu_host_clear_out(&H);
@@ -415,10 +461,11 @@ static void test_pin(void) {
     abandon_words(restore, &count);
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
+    approve_challenge();   /* v2: 셋업이 PIN 을 요구한다 */
 
-    const uint8_t pin[4] = { 0, 3, 1, 2 };
-    uint8_t setpin[5] = { 4, 0, 3, 1, 2 };
-    request(NU_CMD_SET_PIN, setpin, 5);
+    
+    
+    request(NU_CMD_SET_PIN, NULL, 0);
     ok("SET_PIN PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING);
     nu_host_clear_out(&H);
     approve_challenge();
@@ -429,7 +476,7 @@ static void test_pin(void) {
 
     request(NU_CMD_GET_STATE, NULL, 0);
     ok("has_pin 플래그", last_response(&status, &p, &len) && (p[0] & NU_FLAG_HAS_PIN));
-    ok("PIN 길이 노출", p[6] == 4);
+    ok("PIN 길이 노출", p[6] == NU_PIN_LEN);
 
     /* 잠갔다가 잘못된 PIN */
     request(NU_CMD_LOCK, NULL, 0);
@@ -440,15 +487,15 @@ static void test_pin(void) {
     request(NU_CMD_UNLOCK, NULL, 0);
     ok("UNLOCK PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING);
     ok("PIN 입력은 LED 로 시퀀스를 보여주지 않는다", W.req.showing == 0);
-    const uint8_t wrongpin[4] = { 1, 1, 1, 1 };
+    const uint8_t wrongpin[NU_PIN_LEN] = { 1, 1, 1, 1, 1, 1 };
     nu_host_clear_out(&H);
-    press_pin(wrongpin, 4);
+    press_pin(wrongpin, NU_PIN_LEN);
     ok("틀린 PIN 은 잠금을 풀지 못한다", W.unlocked == 0);
     ok("요청은 살아 있다 (재시도 가능)", W.req.cmd == NU_CMD_UNLOCK);
     ok("시도 횟수 감소", W.pin_attempts == NU_PIN_ATTEMPTS - 1);
 
     nu_host_clear_out(&H);
-    press_pin(pin, 4);
+    press_pin(TEST_PIN, NU_PIN_LEN);
     ok("맞는 PIN 으로 해제", W.unlocked == 1);
     ev = find_event(NU_EVT_REQUEST_RESULT);
     ok("UNLOCK 결과 이벤트", ev && ev->data[7] == NU_CMD_UNLOCK && ev->data[8] == 0x90);
@@ -464,16 +511,78 @@ static void test_pin(void) {
     ok("재부팅 후에도 지갑 유지",
        last_response(&status, &p, &len) && (p[0] & NU_FLAG_INITIALIZED));
     ok("재부팅 직후 잠김", p[0] & NU_FLAG_LOCKED);
-    ok("PIN 길이 유지", p[6] == 4);
+    ok("PIN 길이 유지", p[6] == NU_PIN_LEN);
 
     request(NU_CMD_UNLOCK, NULL, 0);
     last_response(&status, &p, &len);
-    press_pin(pin, 4);
+    press_pin(TEST_PIN, NU_PIN_LEN);
     ok("재부팅 후 PIN 으로 해제", W.unlocked == 1);
 
-    /* 연결이 끊기면 다시 잠긴다 */
+    /* 연결이 끊기면 다시 잠긴다.
+     * 포트가 이걸 호출하지 않으면 지갑이 열린 채로 남는다 — 다음에 붙는 쪽이
+     * PIN 없이 서명을 요청할 수 있다. Arduino 포트에서 실제로 빠져 있었다. */
     nu_wallet_disconnected(&W);
     ok("연결 해제 시 자동 잠금", W.unlocked == 0);
+    ok("연결 해제해도 지갑은 남는다", W.rec_len > 0);
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("연결 해제 뒤 주소 거부",
+       last_response(&status, &p, &len) && status == NU_SW_LOCKED);
+}
+
+/* 세션은 "잠금 해제 후 경과" 가 아니라 **유휴** 로 닫혀야 한다.
+ * 실기기에서 잡힌 버그다 — 계속 쓰고 있는데도 5분이 지나면 닫혔다.
+ * UNLOCK 성공 경로가 시계를 밀지 않은 것이 직접 원인이었고, 활동이 시계를
+ * 밀지 않는 것이 근본 원인이었다. */
+static void test_session_idle(void) {
+    puts("지갑  세션 유휴");
+    boot(0x7070, 0);
+
+    uint16_t status; const uint8_t *p; size_t len;
+    restore_abandon();
+    ok("셋업 직후 잠금 해제", W.unlocked == 1);
+
+    /* 활동이 있으면 계속 열려 있어야 한다 — 4분씩 두 번, 사이에 명령 하나. */
+    for (int i = 0; i < 2; i++) {
+        H.now += NU_SESSION_IDLE_MS - 60000;
+        nu_wallet_tick(&W, H.now);
+        request(NU_CMD_GET_STATE, NULL, 0);
+    }
+    nu_wallet_tick(&W, H.now);
+    ok("쓰는 동안에는 닫히지 않는다", W.unlocked == 1);
+
+    /* 조용하면 닫힌다. */
+    H.now += NU_SESSION_IDLE_MS + 1000;
+    nu_wallet_tick(&W, H.now);
+    ok("유휴 시간이 지나면 잠긴다", W.unlocked == 0);
+
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("잠긴 뒤 주소 거부",
+       last_response(&status, &p, &len) && status == NU_SW_LOCKED);
+
+    /* 다시 열고, 곧바로 쓰는 것이 되어야 한다 (UNLOCK 이 시계를 밀어야 한다). */
+    request(NU_CMD_UNLOCK, NULL, 0);
+    last_response(&status, &p, &len);
+    approve_challenge();
+    ok("PIN 으로 다시 열림", W.unlocked == 1);
+    nu_wallet_tick(&W, H.now);
+    ok("열자마자 닫히지 않는다", W.unlocked == 1);
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("열린 직후 주소 조회",
+       last_response(&status, &p, &len) && status == NU_SW_OK);
+
+    /* 캐시된 시각으로 틱을 돌려도 닫히면 안 된다.
+     *
+     * 실기기에서 이것 때문에 잠금 해제 직후 다시 잠겼다. .ino 의 loop() 는
+     * 맨 위에서 millis() 를 캐시해 틱에 넘기는데, 그 사이 nuble_task() 안에서
+     * PBKDF2 가 7초를 쓰고 last_active_ms 를 "미래" 로 밀어 놓는다.
+     * now - last_active 를 그냥 빼면 uint32 언더플로로 49일이 지난 것이 된다.
+     *
+     * 호스트 테스트가 이걸 놓친 이유: 항상 같은 H.now 를 썼기 때문이다. */
+    nu_wallet_tick(&W, H.now - 7000);          /* 7초 뒤처진 캐시 시각 */
+    ok("뒤처진 시각으로 틱을 돌려도 안 닫힌다", W.unlocked == 1);
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("그 뒤에도 주소 조회 가능",
+       last_response(&status, &p, &len) && status == NU_SW_OK);
 }
 
 /* 시도 횟수가 RAM 에만 있으면 전원을 껐다 켜는 것만으로 제한이 사라진다.
@@ -487,10 +596,11 @@ static void test_pin_attempts_survive_reboot(void) {
     abandon_words(restore, &count);
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
+    approve_challenge();   /* v2: 셋업이 PIN 을 요구한다 */
 
-    const uint8_t setpin[5] = { 4, 0, 3, 1, 2 };
-    const uint8_t wrong[4] = { 1, 1, 1, 1 };
-    request(NU_CMD_SET_PIN, setpin, 5);
+    const 
+    const uint8_t wrong[NU_PIN_LEN] = { 1, 1, 1, 1, 1, 1 };
+    request(NU_CMD_SET_PIN, NULL, 0);
     approve_challenge();
     ok("PIN 설정", nu_store_has_pin(W.rec));
     ok("새 레코드는 시도 횟수가 만수",
@@ -500,7 +610,7 @@ static void test_pin_attempts_survive_reboot(void) {
     request(NU_CMD_LOCK, NULL, 0);
     request(NU_CMD_UNLOCK, NULL, 0);
     last_response(&status, &p, &len);
-    press_pin(wrong, 4);
+    press_pin(wrong, NU_PIN_LEN);
     ok("틀리면 카운터가 준다", W.pin_attempts == NU_PIN_ATTEMPTS - 1);
     ok("줄어든 값이 플래시에 남는다",
        nu_store_tries(H.store, H.store_len) == NU_PIN_ATTEMPTS - 1);
@@ -513,7 +623,7 @@ static void test_pin_attempts_survive_reboot(void) {
     for (int i = NU_PIN_ATTEMPTS - 1; i > 0; i--) {
         request(NU_CMD_UNLOCK, NULL, 0);
         last_response(&status, &p, &len);
-        press_pin(wrong, 4);
+        press_pin(wrong, NU_PIN_LEN);
     }
     ok("소진되면 카운터가 0", W.pin_attempts == 0);
     ok("소진되면 지갑을 지운다", W.rec_len == 0 && H.store_len == 0);
@@ -537,7 +647,11 @@ static void test_passphrase_and_wipe(void) {
     abandon_words(req, &count);
     memcpy(req + 25, "TREZOR", 6);
     request(NU_CMD_SETUP_RESTORE, req, 31);
-    ok("패스프레이즈로 복구", last_response(&status, &p, &len) && status == NU_SW_OK);
+    last_response(&status, &p, &len);
+    approve_challenge();   /* v2: 셋업이 PIN 을 요구한다 */
+    ok("패스프레이즈로 복구", W.unlocked);
+    request(NU_CMD_GET_CHAIN_ADDRESS, (const uint8_t *)ETH_PATH_REQ, 22);
+    ok("주소 조회", last_response(&status, &p, &len) && status == NU_SW_OK);
     uint8_t addr_pass[20];
     memcpy(addr_pass, p, 20);
     ok("패스프레이즈가 있으면 다른 지갑",
@@ -546,11 +660,10 @@ static void test_passphrase_and_wipe(void) {
     /* 잠갔다 패스프레이즈 없이 열면 다른 주소가 나온다 — 기기는 구분하지 못한다 */
     request(NU_CMD_LOCK, NULL, 0);
     request(NU_CMD_UNLOCK, NULL, 0);
-    ok("PIN 없으면 UNLOCK 즉시 성공",
-       last_response(&status, &p, &len) && status == NU_SW_OK && len == 20);
-    check_hex("패스프레이즈를 빼면 원래 지갑", p, 20, "9858effd232b4033e47d90003d41ec34ecaeda94");
+    approve_challenge();               /* v2: PIN 을 눌러야 열린다 */
 
-    /* WIPE */
+    /* WIPE — v2 는 잠금이 풀린 세션에서만 지운다.
+     * 잠긴 채로 지우려면 공장 초기화(버튼)를 쓴다. */
     request(NU_CMD_WIPE, NULL, 0);
     ok("WIPE PENDING", last_response(&status, &p, &len) && status == NU_SW_PENDING);
     nu_host_clear_out(&H);
@@ -584,6 +697,7 @@ static void test_bad_input(void) {
     abandon_words(restore, &count);
     request(NU_CMD_SETUP_RESTORE, restore, 25);
     last_response(&status, &p, &len);
+    approve_challenge();   /* v2: 셋업이 PIN 을 요구한다 */
 
     request(NU_CMD_GET_ADDRESS, (const uint8_t *)"\x01\x09\x00", 3);
     ok("경로 depth 초과", last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
@@ -601,15 +715,18 @@ static void test_bad_input(void) {
        last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
     ok("거부된 요청은 챌린지를 걸지 않는다", W.req.cmd == 0);
 
-    uint8_t setpin[4] = { 2, 0, 1, 0 };
-    request(NU_CMD_SET_PIN, setpin, 3);
-    ok("PIN 이 너무 짧으면 거부",
-       last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
-
-    uint8_t badbtn[5] = { 4, 0, 1, 2, 9 };
-    request(NU_CMD_SET_PIN, badbtn, 5);
-    ok("버튼 번호 범위 밖 거부",
-       last_response(&status, &p, &len) && status == NU_SW_BAD_PARAM);
+    /* v2: SET_PIN 은 페이로드를 받지 않는다. PIN 값은 기기 버튼으로만 들어간다.
+     * 잠긴 상태에서는 아예 시작되지 않는다. */
+    request(NU_CMD_LOCK, NULL, 0);
+    request(NU_CMD_SET_PIN, NULL, 0);
+    ok("SET_PIN 은 잠긴 상태에서 거부",
+       last_response(&status, &p, &len) &&
+       (status == NU_SW_LOCKED || status == NU_SW_NOT_INITIALIZED));
+    /* v2: SET_PIN 에는 검증할 페이로드가 없다. 대신 잘못된 버튼 번호는
+     * nu_wallet_button 이 조용히 무시하는지 본다. */
+    const uint8_t before = W.req.cmd;
+    nu_wallet_button(&W, 9);
+    ok("범위 밖 버튼은 무시된다", W.req.cmd == before);
 }
 
 int main(void) {
@@ -620,6 +737,7 @@ int main(void) {
     test_lifecycle();
     test_pin();
     test_pin_attempts_survive_reboot();
+    test_session_idle();
     test_passphrase_and_wipe();
     test_bad_input();
     printf("\n%d개 중 %d개 실패\n", total, fails);

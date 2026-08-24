@@ -2,8 +2,8 @@
 #if defined(__ZEPHYR__)
 
 #include "ble.h"
-#include "../../app/framing.h"
-#include "../../app/protocol.h"
+#include "core/framing.h"
+#include "core/protocol.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>

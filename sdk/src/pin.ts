@@ -1,18 +1,15 @@
 /**
  * PIN · 잠금 — docs/protocol.md §8.
  *
- * 버튼 4개의 조합이 두 가지 역할을 한다. 섞으면 안 된다.
+ * v2 부터 PIN 값은 **BLE 로 오가지 않는다.** 사용자가 기기 버튼으로 6번 누르고,
+ * 설정할 때는 한 번 더 눌러 확인한다. 호스트는 PIN 을 모른다 — PIN 의 목적이
+ * "호스트가 감염돼도 기기를 못 연다" 이므로 호스트가 알면 앞뒤가 맞지 않는다.
  *
- *   PIN       사용자가 정한 고정 시퀀스. 기기를 열 때 쓴다.
- *             LED 로 보여주지 않는다 — 사용자가 아는 값이다.
- *   챌린지     기기가 매번 새로 뽑는 랜덤 시퀀스. 서명을 승인할 때 쓴다.
- *             LED 로 보여준다. 목적은 비밀이 아니라 "사람이 여기 있다"의 증명.
- *
- * PIN 을 설정·변경하는 것 자체도 챌린지 승인이 필요하다. 웹에서 PIN 을 보내는
- * 것만으로는 바뀌지 않는다.
+ * 그래서 이 파일의 API 는 PIN 값을 받지 않는다. 절차를 시작시키고, 기기가 보내는
+ * 진행 이벤트를 콜백으로 전달할 뿐이다.
  */
-import { CMD, EVT, SW, FLAG, PIN, WalletError, hex } from './protocol.js';
-import { toChecksumAddress } from './address.js';
+import { CMD, EVT, SW, FLAG, PIN, APPROVAL, WalletError,
+         type ApprovalKind } from './protocol.js';
 import type { NuWallet } from './client.js';
 import type { ChallengeCallbacks } from './types.js';
 
@@ -62,51 +59,36 @@ export class NuWalletAdmin {
   }
 
   /**
-   * PIN 을 설정하거나 바꾼다. 빈 배열이면 PIN 을 없앤다.
+   * PIN 을 바꾼다. 잠금이 풀려 있어야 한다.
    *
-   * @param pin 버튼 번호 배열. 각 값 0..3, 길이 4..8.
+   * 값은 넘기지 않는다 — 사용자가 기기에서 6번 누르고, 오타를 잡기 위해 한 번
+   * 더 누른다. 두 입력이 다르면 `SW.PIN_MISMATCH` 로 실패한다.
    *
-   * ⚠️  PIN 이 BLE 로 평문 전송된다. 기기에 입력 UI 가 없어서다. 잠금을 풀
-   *     때의 PIN 입력은 기기 버튼으로만 받으며 밖으로 나가지 않는다.
+   * PIN 은 없앨 수 없다. v2 는 셋업 때 반드시 정하게 하며, PIN 없는 레코드는
+   * 봉인 키가 공개값이라 플래시만 뜨면 열린다.
    */
-  async setPin(pin: number[], opts: ApprovalOptions = {}): Promise<void> {
-    validatePin(pin);
-    const payload = new Uint8Array(1 + pin.length);
-    payload[0] = pin.length;
-    payload.set(pin, 1);
-    await this.approve(CMD.SET_PIN, payload, opts);
-  }
-
-  /** PIN 을 제거한다. 승인 절차는 설정과 같다. */
-  async clearPin(opts: ApprovalOptions = {}): Promise<void> {
-    await this.approve(CMD.SET_PIN, new Uint8Array([0]), opts);
+  async changePin(opts: ApprovalOptions = {}): Promise<void> {
+    await this.approve(CMD.SET_PIN, new Uint8Array(), opts);
   }
 
   /**
-   * 잠금을 해제한다.
+   * 잠금을 해제한다. 사용자가 **기기 버튼으로** PIN 6자리를 눌러야 하며,
+   * 그동안 `onStart`/`onProgress` 가 호출된다.
    *
-   * PIN 이 없으면 즉시 열리고 기본 경로의 주소를 돌려준다.
-   * PIN 이 있으면 사용자가 **기기 버튼으로** PIN 을 눌러야 하며, 그동안
-   * `onStart`/`onProgress` 가 호출된다.
+   * 열린 세션은 조용하면 기기가 스스로 닫는다 (5분). 연결이 끊겨도 닫힌다.
    *
    * @param passphrase BIP-39 패스프레이즈. 저장되지 않고 이번 세션에만 쓰인다.
    *                   값이 다르면 다른 지갑이 되며 기기는 그것을 구분하지 못한다.
    */
-  async unlock(passphrase = '', opts: ApprovalOptions = {}): Promise<string | null> {
+  async unlock(passphrase = '', opts: ApprovalOptions = {}): Promise<void> {
     const bytes = new TextEncoder().encode(passphrase);
     if (bytes.length > 64) {
       throw new WalletError(SW.BAD_PARAM, '패스프레이즈는 64바이트를 넘을 수 없습니다');
     }
     const r = await this.transport.send(CMD.UNLOCK, bytes);
-
-    if (r.status === SW.OK) {
-      // PIN 이 없어 바로 열린 경우 — 주소가 함께 온다.
-      return r.payload.length >= 20 ? toChecksumAddress(hex(r.payload.subarray(0, 20))) : null;
-    }
+    // v2 는 PIN 이 항상 있으므로 즉시 열리는 경우가 없다.
     if (r.status !== SW.PENDING) throw new WalletError(r.status);
-
     await this.waitForApproval(requestIdOf(r.payload), opts);
-    return null;
   }
 
   /** 즉시 잠근다. RAM 의 시드가 지워진다. */
@@ -157,7 +139,12 @@ export class NuWalletAdmin {
         if (dv.getUint32(0, false) !== requestId) return;
 
         if (e.evt === EVT.CHALLENGE_STARTED && p.length >= 6) {
-          opts.onStart?.({ requestId, steps: p[4]!, command: p[5]! });
+          // v2 는 KIND 를 함께 준다. 호스트가 "PIN 을 누르세요" 와 "LED 를 보고
+          // 누르세요" 중 무엇을 띄울지 추측하지 않아도 된다.
+          opts.onStart?.({
+            requestId, steps: p[4]!, command: p[5]!,
+            kind: p.length >= 7 ? (p[6]! as ApprovalKind) : APPROVAL.CONFIRM,
+          });
         } else if (e.evt === EVT.CHALLENGE_PROGRESS && p.length >= 6) {
           opts.onProgress?.({ requestId, step: p[4]!, attemptsLeft: p[5]! });
         } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
@@ -176,11 +163,16 @@ export class NuWalletAdmin {
 
 // ── 헬퍼 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 화면에서 사용자가 고른 패턴이 기기 규칙에 맞는지 본다.
+ *
+ * ⚠️  이 값은 기기로 보내지 않는다 — v2 의 PIN 은 버튼으로만 들어간다.
+ *     설정 화면이 "6자리를 채웠는지" 를 확인하는 용도로만 쓴다.
+ */
 export function validatePin(pin: number[]): void {
-  if (pin.length === 0) return;                      // 제거는 허용
-  if (pin.length < PIN.MIN || pin.length > PIN.MAX) {
+  if (pin.length !== PIN.LEN) {
     throw new WalletError(SW.BAD_PARAM,
-      `PIN 은 ${PIN.MIN}~${PIN.MAX} 자리여야 합니다 (지금 ${pin.length}자리)`);
+      `PIN 은 ${PIN.LEN}자리여야 합니다 (지금 ${pin.length}자리)`);
   }
   for (const b of pin) {
     if (!Number.isInteger(b) || b < 0 || b >= PIN.BUTTONS) {

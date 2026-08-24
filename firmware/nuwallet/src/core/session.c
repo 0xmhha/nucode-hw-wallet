@@ -7,10 +7,11 @@
  * 주고, 호출자가 쓰고 나서 지운다.                                          */
 #include "internal.h"
 #include "store.h"
-#include "crypto/bip39.h"
-#include "crypto/bip32.h"
-#include "crypto/ecdsa.h"
-#include "crypto/keccak.h"
+#include "../crypto/bip39.h"
+#include "../crypto/bip32.h"
+#include "../crypto/slip10.h"
+#include "../crypto/ecdsa.h"
+#include "../crypto/keccak.h"
 #include <string.h>
 
 /* ── 세션 ───────────────────────────────────────────────────────────────── */
@@ -31,6 +32,19 @@ int nu_seed_from_words(nu_wallet *w, const uint16_t *words, uint8_t count,
     if (!bip39_to_string(words, count, mnemonic, sizeof mnemonic)) return 0;
     bip39_seed(mnemonic, passphrase ? passphrase : "", w->seed);
     memset(mnemonic, 0, sizeof mnemonic);
+    return 1;
+}
+
+/* SLIP-0010 Ed25519 파생. 32바이트 키를 호출자 버퍼에 넣는다. 실패 0.
+ *
+ * 하드닝되지 않은 경로 요소는 slip10 이 거부한다 — Ed25519 에는 공개키 파생이
+ * 없어서 SLIP-0010 이 하드닝만 정의한다. */
+int nu_derive_ed25519(const nu_wallet *w, const uint32_t *path, uint8_t depth,
+                      uint8_t key[32]) {
+    slip10_ed25519_key k;
+    if (!slip10_ed25519_derive(w->seed, sizeof w->seed, path, (int)depth, &k)) return 0;
+    memcpy(key, k.key, 32);
+    slip10_ed25519_wipe(&k);
     return 1;
 }
 

@@ -1,6 +1,8 @@
 #line 1 "/Users/0xtopaz/work/github/0xmhha/nucode-hw-wallet/firmware/nuwallet/src/transport/ble_transport.cpp"
 #include "ble_transport.h"
-#include "../controller/protocol.h"
+#include "../core/framing.h"
+#include "../core/protocol.h"
+#include "../core/wallet.h"
 #include <bluefruit.h>
 #include <string.h>
 
@@ -24,85 +26,63 @@ static BLEService        svc(UUID_SVC);
 static BLECharacteristic chr_rx(UUID_RX);
 static BLECharacteristic chr_tx(UUID_TX);
 
-/* ── 수신 조립 ──────────────────────────────────────────────────────────── */
-static uint8_t  asm_buf[PROTO_MAX_MSG];
-static uint16_t asm_total = 0;
-static uint16_t asm_have  = 0;
-static uint16_t asm_seq   = 0;
+/* ── 수신 조립 ──────────────────────────────────────────────────────────────
+ *
+ * 프레이밍은 코어(core/framing.c)가 한다. 예전에는 여기에 같은 것을 한 벌 더
+ * 두고 있었는데, 두 벌이 어긋나면 조용히 깨진 메시지가 된다.
+ *
+ * Bluefruit 의 write 콜백은 BLE 스택 태스크에서 돈다. 거기서 PBKDF2 와 ECC 를
+ * 돌리면 연결 이벤트 처리가 굶어 supervision timeout 으로 링크가 끊긴다.
+ * 완성된 요청을 한 개짜리 mailbox 로 넘기고 loop() 에서 처리한다. */
+static nu_reasm  asm_in;
+static nu_wallet *g_wallet;
 
-/* Bluefruit write callback은 BLE 스택 태스크에서 실행된다. 여기서 PBKDF2와
- * ECC를 직접 수행하면 연결 이벤트 처리가 굶어 supervision timeout으로 링크가
- * 끊어진다. 완성된 요청을 한 개짜리 mailbox로 넘기고 loop()에서 처리한다. */
-static uint8_t dispatch_buf[PROTO_MAX_MSG];
+static uint8_t dispatch_buf[NU_MAX_MESSAGE];
 static volatile uint16_t dispatch_len = 0;
 static volatile bool dispatch_ready = false;
 
-static void asm_reset(void) { asm_total = asm_have = asm_seq = 0; }
+static void asm_reset(void) { nu_reasm_init(&asm_in); }
 
-static void framing_error(void) {
+static void framing_error(uint16_t status) {
     asm_reset();
-    uint8_t e[4] = { (uint8_t)(SW_FRAMING_ERROR >> 8), (uint8_t)SW_FRAMING_ERROR, 0, 0 };
-    nuble_send(TAG_MESSAGE, e, 4);
+    uint8_t e[4] = { (uint8_t)(status >> 8), (uint8_t)status, 0, 0 };
+    nuble_send(NU_TAG_MESSAGE, e, 4);
 }
 
-static void rx_written(uint16_t conn_hdl, BLECharacteristic *chr, uint8_t *data, uint16_t len) {
+static void rx_written(uint16_t conn_hdl, BLECharacteristic *chr,
+                       uint8_t *data, uint16_t len) {
     (void)conn_hdl; (void)chr;
-    if (len < 3) { framing_error(); return; }
 
-    const uint16_t seq = (uint16_t)((data[1] << 8) | data[2]);
-    if (seq == 0) {
-        if (len < 5) { framing_error(); return; }
-        asm_total = (uint16_t)((data[3] << 8) | data[4]);
-        if (asm_total > PROTO_MAX_MSG) { framing_error(); return; }
-        asm_have = 0; asm_seq = 1;
-        const uint16_t n = (uint16_t)(len - 5);
-        if (n > asm_total) { framing_error(); return; }
-        memcpy(asm_buf, data + 5, n);
-        asm_have = n;
-    } else {
-        if (seq != asm_seq) { framing_error(); return; }
-        asm_seq++;
-        const uint16_t n = (uint16_t)(len - 3);
-        if (asm_have + n > asm_total) { framing_error(); return; }
-        memcpy(asm_buf + asm_have, data + 3, n);
-        asm_have = (uint16_t)(asm_have + n);
-    }
+    const uint8_t *msg = NULL;
+    size_t msg_len = 0;
+    const int r = nu_reasm_push(&asm_in, data, len, &msg, &msg_len);
+    if (r == 0) return;                          /* 아직 조립 중 */
+    if (r < 0) { framing_error((uint16_t)(-r)); return; }
 
-    if (asm_have >= asm_total) {
-        const uint16_t total = asm_total;
-        if (dispatch_ready) { framing_error(); return; }
-        memcpy(dispatch_buf, asm_buf, total);
-        dispatch_len = total;
-        dispatch_ready = true;
-        asm_reset();
-    }
+    /* 앞 요청을 loop() 가 아직 처리 중이면 받을 곳이 없다. 조용히 버리면
+     * 타임아웃만 나서 원인을 알 수 없으므로 프레이밍 오류로 알린다. */
+    if (dispatch_ready) { framing_error(NU_SW_FRAMING_ERROR); return; }
+    memcpy(dispatch_buf, msg, msg_len);
+    dispatch_len = (uint16_t)msg_len;
+    dispatch_ready = true;
 }
 
 /* ── 송신 ────────────────────────────────────────────────────────────────── */
+
+/* notify() 는 TX 버퍼가 빌 때까지 세마포어로 기다리므로 여기서 유실되지 않는다. */
+static void send_packet(const uint8_t *pkt, size_t len, void *ctx) {
+    (void)ctx;
+    if (!chr_tx.notify(pkt, (uint16_t)len)) {
+        /* 구독이 끊겼거나 링크가 죽었다. 다음 패킷도 나가지 못한다. */
+    }
+}
+
 void nuble_send(uint8_t tag, const uint8_t *payload, uint16_t len) {
     if (!Bluefruit.connected()) return;
-
-    /* 협상된 MTU 에서 ATT 헤더 3바이트를 뺀 것이 한 번에 보낼 수 있는 양이다. */
+    /* 협상된 MTU 에서 ATT 헤더 3바이트를 뺀 것이 한 패킷의 최대 크기다. */
     uint16_t mtu = Bluefruit.Connection(0) ? Bluefruit.Connection(0)->getMtu() : 23;
     if (mtu < 23) mtu = 23;
-    uint16_t chunk = (uint16_t)(mtu - 3);
-    if (chunk > 244) chunk = 244;
-
-    uint8_t pkt[247];
-    uint16_t off = 0, seq = 0;
-    do {
-        const uint16_t head = (seq == 0) ? 5 : 3;
-        uint16_t room = (uint16_t)(chunk > head ? chunk - head : 1);
-        uint16_t n = (uint16_t)(len - off);
-        if (n > room) n = room;
-        pkt[0] = tag;
-        pkt[1] = (uint8_t)(seq >> 8); pkt[2] = (uint8_t)seq;
-        if (seq == 0) { pkt[3] = (uint8_t)(len >> 8); pkt[4] = (uint8_t)len; }
-        if (n) memcpy(pkt + head, payload + off, n);
-        chr_tx.notify(pkt, (uint16_t)(head + n));
-        off = (uint16_t)(off + n);
-        seq++;
-    } while (off < len);
+    nu_frame(tag, payload, len, (size_t)(mtu - 3), send_packet, NULL);
 }
 
 /* ── 연결 콜백 ───────────────────────────────────────────────────────────── */
@@ -114,6 +94,11 @@ static void on_connect(uint16_t conn_hdl) {
 static void on_disconnect(uint16_t conn_hdl, uint8_t reason) {
     (void)conn_hdl; (void)reason;
     asm_reset();
+    dispatch_ready = false;
+    /* 코어에 알려 세션을 닫는다. 이걸 빠뜨리면 호스트가 끊긴 뒤에도 지갑이
+     * 열린 채로 남는다 — 다음에 붙는 쪽이 PIN 없이 서명을 요청할 수 있다.
+     * docs/protocol.md §8 은 "연결 해제 후 자동으로 잠긴다" 고 적고 있다. */
+    if (g_wallet) nu_wallet_disconnected(g_wallet);
 }
 
 int nuble_connected(void) { return Bluefruit.connected() ? 1 : 0; }
@@ -125,7 +110,8 @@ int nuble_paired(void) {
     return (c && c->connected() && c->secured()) ? 1 : 0;
 }
 
-void nuble_begin(const char *device_name) {
+void nuble_begin(const char *device_name, nu_wallet *w) {
+    g_wallet = w;
     Bluefruit.begin();
     Bluefruit.setTxPower(4);
     Bluefruit.setName(device_name);
@@ -161,10 +147,12 @@ void nuble_begin(const char *device_name) {
     Bluefruit.Advertising.start(0);
 }
 
+/* loop() 가 부른다. 조립이 끝난 요청을 코어에 넘긴다 — **메인 스택에서** 돈다.
+ * BIP-32 파생과 PBKDF2 가 2KB 넘는 스택을 쓰므로 BLE 콜백에서 부르면 안 된다. */
 void nuble_task(void) {
     if (!dispatch_ready) return;
     const uint16_t len = dispatch_len;
-    dispatch_ready = false;
-    proto_handle(dispatch_buf, len);
+    nu_wallet_handle(g_wallet, dispatch_buf, len);
     memset(dispatch_buf, 0, len);
+    dispatch_ready = false;          /* 응답을 다 내보낸 뒤에 슬롯을 연다 */
 }

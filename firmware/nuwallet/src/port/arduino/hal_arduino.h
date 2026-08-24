@@ -2,7 +2,7 @@
 #define NUWALLET_HAL_ARDUINO_H
 /* Arduino(Bluefruit) 용 nu_hal 구현 — 난수 / 저장 / LED / 시간.
  * 송신(hal->send)은 스케치의 BLE 글루가 채운다. */
-#include "../../app/hal.h"
+#include "../../core/hal.h"
 
 #ifdef __cplusplus
 extern "C" {
