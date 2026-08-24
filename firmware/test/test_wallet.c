@@ -291,6 +291,25 @@ static void test_lifecycle(void) {
     ok("승인 종류가 PIN 설정", W.req.kind == NU_APPROVAL_PIN_NEW);
     approve_challenge();
     ok("PIN 설정 후 저장됨", W.rec_len > 0 && W.unlocked);
+
+    /* 재입력에는 시간을 새로 준다 — 60초가 12번의 입력을 통틀어 적용되면
+     * PIN 을 처음 정하는 사람이 1차를 마치고 생각하는 사이에 만료된다.
+     * 실기기에서 실제로 그렇게 끊겼다. */
+    {
+        boot(0x6161, 0);
+        uint8_t gen2[64]; uint8_t c2;
+        abandon_words(gen2, &c2);
+        request(NU_CMD_SETUP_RESTORE, gen2, 25);
+        last_response(&status, &p, &len);
+        settle_leds();
+        press_seq(TEST_PIN, NU_PIN_LEN);                   /* 1차 입력 */
+        ok("1차 입력 뒤 재입력 단계", W.req.stage == 1);
+        H.now += NU_CHALLENGE_TIMEOUT_MS - 5000;           /* 55초 뜸들임 */
+        nu_wallet_tick(&W, H.now);
+        ok("재입력 도중에는 만료되지 않는다", W.req.cmd == NU_CMD_SETUP_RESTORE);
+        press_seq(TEST_PIN, NU_PIN_LEN);                   /* 재입력 */
+        ok("뜸들여도 셋업이 끝난다", W.rec_len > 0 && W.unlocked);
+    }
     ok("PIN 길이 6 고정", nu_store_pin_len(W.rec) == NU_PIN_LEN);
 
     /* 이미 있으면 다시 못 만든다 */

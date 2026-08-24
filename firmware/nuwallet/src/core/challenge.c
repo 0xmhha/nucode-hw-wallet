@@ -243,6 +243,10 @@ static void pin_new_entered(nu_wallet *w) {
         memcpy(r->first, r->seq, NU_PIN_LEN);
         r->stage = 1;
         r->pos = 0;
+        /* 재입력에 시간을 새로 준다. 안 그러면 60초가 12번의 입력을 통틀어
+         * 적용되어, PIN 을 처음 정하는 사람이 1차를 마치고 잠깐 생각하는
+         * 사이에 만료된다. 실기기에서 실제로 그렇게 끊겼다. */
+        r->started_ms = w->hal->millis(w->hal->ctx);
         progress(w);
         return;
     }

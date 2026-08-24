@@ -35,6 +35,36 @@ const GOLDEN = {
     + '2a0732e684601b827b62e0c20b33538729be07ecf634b5a579c037697744a0b91b',
 };
 
+/* 사람이 버튼을 누를 때까지 기다린다.
+ *
+ * 기기의 승인 제한은 60초다. 사람이 보드 앞에 앉기까지 그보다 오래 걸릴 수
+ * 있으므로, 만료되면 다시 건다. 진행 상황을 그때그때 찍어서 눌린 것이 인식됐는지
+ * 바로 보이게 한다. */
+async function withButtons(label, run, { rounds = 10 } = {}) {
+  const stamp = () => new Date().toTimeString().slice(0, 8);
+  const opts = {
+    timeoutMs: 65_000,
+    onStart: (i) => console.log(`  [${stamp()}] ▶ ${label} — ${KIND[i.kind]}`),
+    onProgress: (i) => console.log(`  [${stamp()}]     ${i.step}자리 인식`),
+  };
+  for (let i = 0; i < rounds; i++) {
+    try {
+      return await run(opts);
+    } catch (e) {
+      const retriable = e?.status === SW.CHALLENGE_TIMEOUT;
+      if (!retriable) throw e;
+      console.log(`  [${stamp()}] 시간 초과 — 다시 겁니다 (${i + 1}/${rounds})`);
+    }
+  }
+  throw new Error(`${label}: 버튼 입력을 받지 못했습니다`);
+}
+
+const KIND = {
+  0: '켜진 LED 를 한 번 누르세요',
+  1: 'PIN 6자리를 누르세요',
+  2: '새 PIN 6자리를 누르고, 같은 값을 한 번 더',
+};
+
 /* 보드가 있는지는 **모듈 로드 시점에** 정해야 한다. describe 의 skip 옵션은
  * 등록할 때 한 번 읽히므로, before() 에서 정하면 늦는다. (함수를 넘기면
  * 언제나 truthy 라 통째로 건너뛴다 — 실제로 그렇게 당했다.) */
@@ -90,7 +120,15 @@ describe('실기기 (NU-40 DK)', { skip: skipReason }, () => {
         + '  펌웨어를 다시 올렸거나 공장 초기화를 했다면 반드시 필요합니다.');
     }
   });
-  after(async () => { await wallet?.disconnect(); });
+  after(async () => {
+    await wallet?.disconnect();
+    /* webbluetooth 의 네이티브 백엔드가 프로세스를 접는 과정에서 잡을 수 없는
+     * Napi 예외를 던진다 (libc++abi terminating). 테스트는 다 끝난 뒤라
+     * 결과에는 영향이 없지만 종료 코드가 더러워진다. 여기서 깔끔히 끝낸다.
+     * 실패가 있었으면 그 코드로 나간다. */
+    await new Promise((r) => setTimeout(r, 200));
+    process.exit(process.exitCode ?? 0);
+  });
 
   test('프로토콜 v2 펌웨어다', async () => {
     const info = await wallet.getInfo();
@@ -122,12 +160,22 @@ describe('실기기 (NU-40 DK)', { skip: skipReason }, () => {
    * CryptoCell)와 타이밍(PBKDF2 중 링크 유지)이다. 프로토콜 자체는
    * conformance.test.js 가 이미 본다. */
   describe('버튼 입력 필요', { skip: !INTERACTIVE && 'NUWALLET_DEVICE_INTERACTIVE=1 로 실행하세요' }, () => {
-    test('PIN 으로 잠금을 해제하고 세션이 유지된다', async () => {
-      const s = await admin.getLockState();
-      if (!s.initialized) return;
-      if (s.locked) {
-        console.log('\n  ▶ 보드에서 PIN 6자리를 누르세요\n');
-        await admin.unlock('', { timeoutMs: 120_000 });
+    test('셋업하거나 잠금을 해제하고, 세션이 유지된다', async () => {
+      let s = await admin.getLockState();
+
+      if (!s.initialized) {
+        /* 지갑이 없으면 알려진 니모닉으로 만든다. 셋업 자체가 기기에서 PIN 을
+         * 받으므로, 이 한 번으로 셋업 경로와 PIN 설정 경로를 함께 본다. */
+        const { mnemonicToIndices } = await import('../dist/wordlist.js');
+        const words = mnemonicToIndices('abandon '.repeat(11) + 'about');
+        const addr = await withButtons('셋업', (o) => wallet.restore(words, o));
+        assert.equal(addr, GOLDEN.addresses["m/44'/60'/0'/0/0"],
+          '셋업 직후 주소가 호스트와 다르다');
+        s = await admin.getLockState();
+        assert.equal(s.hasPin, true, '셋업이 PIN 을 받지 않았다');
+        assert.equal(s.pinLength, 6);
+      } else if (s.locked) {
+        await withButtons('잠금 해제', (o) => admin.unlock('', o));
       }
       assert.equal((await admin.getLockState()).locked, false);
 
@@ -153,11 +201,11 @@ describe('실기기 (NU-40 DK)', { skip: skipReason }, () => {
     });
 
     test('personal_sign 이 골든 벡터와 일치한다', async () => {
-      console.log('\n  ▶ 켜진 LED 의 버튼을 한 번 누르세요\n');
-      const sig = await wallet.signMessage("m/44'/60'/0'/0/0", GOLDEN.personalMessage,
-        { timeoutMs: 120_000 });
+      const sig = await withButtons('서명 승인', (o) =>
+        wallet.signMessage("m/44'/60'/0'/0/0", GOLDEN.personalMessage, o));
       assert.equal(sig.serialized, GOLDEN.personalSig,
         'RFC 6979 결정론적 서명이 호스트와 다르다');
+      assert.equal(sig.v, sig.recid + 27);
     });
 
     test('RLP 이 아니면 보드가 거부한다', async () => {
