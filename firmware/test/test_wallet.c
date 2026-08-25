@@ -581,6 +581,35 @@ static void test_leds(void) {
     for (uint8_t i = 2; i < NU_PIN_LEN; i++) nu_wallet_button(&W, TEST_PIN[i]);
     ok("PIN 6자리로 해제됨", W.unlocked == 1);
 
+    /* PIN 설정: 1차 입력과 재입력이 눈에 띄게 달라야 한다.
+     * 같으면 사용자는 다시 눌러야 하는지 알 수 없다 — 실기기에서 여기서 멈췄다. */
+    {
+        boot(0x1ed2, 0);
+        uint8_t wr[64]; uint8_t wc;
+        abandon_words(wr, &wc);
+        request(NU_CMD_SETUP_RESTORE, wr, 25);
+        last_response(&status, &p, &len);
+
+        H.now = 0;   nu_wallet_tick(&W, H.now);
+        const uint8_t s1a = H.leds;
+        H.now = 500; nu_wallet_tick(&W, H.now);
+        const uint8_t s1b = H.leds;
+        ok("1차 대기: 4개가 다 같이 점멸", (s1a | s1b) == 0x0f && (s1a & s1b) == 0x00);
+
+        press_seq(TEST_PIN, NU_PIN_LEN);              /* 1차 입력 완료 */
+        ok("재입력 단계 진입", W.req.stage == 1 && W.req.pos == 0);
+
+        H.now += 300; nu_wallet_tick(&W, H.now);
+        const uint8_t s2a = H.leds;
+        H.now += 300; nu_wallet_tick(&W, H.now);
+        const uint8_t s2b = H.leds;
+        ok("재입력 대기: 번갈아 점멸 (1차와 다르다)",
+           ((s2a == 0x05 && s2b == 0x0a) || (s2a == 0x0a && s2b == 0x05)));
+
+        press_seq(TEST_PIN, NU_PIN_LEN);
+        ok("재입력으로 셋업 완료", W.rec_len > 0 && W.unlocked);
+    }
+
     /* 서명 확인 — 눌러야 할 LED 하나가 **계속** 켜져 있어야 한다.
      * 예전에는 450ms 만 반짝이고 꺼져서, 눈을 떼면 어느 버튼인지 알 수 없었다. */
     request(NU_CMD_SIGN_PERSONAL,

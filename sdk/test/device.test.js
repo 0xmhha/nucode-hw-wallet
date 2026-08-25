@@ -42,10 +42,22 @@ const GOLDEN = {
  * 바로 보이게 한다. */
 async function withButtons(label, run, { rounds = 10 } = {}) {
   const stamp = () => new Date().toTimeString().slice(0, 8);
+  let kind = 0, seen = 0;
   const opts = {
-    timeoutMs: 65_000,
-    onStart: (i) => console.log(`  [${stamp()}] ▶ ${label} — ${KIND[i.kind]}`),
-    onProgress: (i) => console.log(`  [${stamp()}]     ${i.step}자리 인식`),
+    timeoutMs: 130_000,          /* 기기 제한 60초 x 2단계 + 여유 */
+    onStart: (i) => { kind = i.kind; seen = 0;
+      console.log(`  [${stamp()}] ▶ ${label} — ${KIND[i.kind]}`); },
+    onProgress: (i) => {
+      /* PIN 설정은 6자리를 채우면 step 이 0 으로 돌아간다 — 재입력 단계다.
+       * 그냥 "0자리" 라고만 찍으면 사용자는 무엇을 기다리는지 알 수 없다. */
+      if (kind === 2 && i.step === 0 && seen > 0) {
+        console.log(`  [${stamp()}]   ↻ 같은 PIN 을 한 번 더 누르세요`
+                    + ' (보드 LED 가 번갈아 깜빡입니다)');
+      } else {
+        console.log(`  [${stamp()}]     ${i.step}자리 인식`);
+      }
+      seen = i.step;
+    },
   };
   for (let i = 0; i < rounds; i++) {
     try {
@@ -54,6 +66,9 @@ async function withButtons(label, run, { rounds = 10 } = {}) {
       const retriable = e?.status === SW.CHALLENGE_TIMEOUT;
       if (!retriable) throw e;
       console.log(`  [${stamp()}] 시간 초과 — 다시 겁니다 (${i + 1}/${rounds})`);
+      /* 기기 쪽 요청이 정리되고 늦게 오는 알림이 지나가기를 기다린다.
+       * 곧바로 다시 걸면 앞 요청의 응답이 새 요청에 짝지어져 프레이밍 오류가 난다. */
+      await new Promise((r) => setTimeout(r, 1500));
     }
   }
   throw new Error(`${label}: 버튼 입력을 받지 못했습니다`);

@@ -360,9 +360,22 @@ void nu_wallet_tick(nu_wallet *w, uint32_t now_ms) {
         /* PIN 은 값을 보여주지 않는다. 몇 자리 눌렀는지만 보여준다 —
          * 길이 6은 공개값이라 이건 정보를 흘리지 않는다.
          * LED 가 4개뿐이라 5·6번째는 순환시킨다. */
-        uint8_t m = 0;
-        for (uint8_t i = 0; i < r->pos; i++) m |= (uint8_t)(1u << (i % 4));
-        nu_leds(w, m ? m : (((now_ms / 500) & 1) ? 0x0f : 0x00));
+        if (r->pos) {
+            uint8_t m = 0;
+            for (uint8_t i = 0; i < r->pos; i++) m |= (uint8_t)(1u << (i % 4));
+            nu_leds(w, m);
+            return;
+        }
+        /* 아직 아무것도 안 눌렀다 — 무엇을 기다리는지 보여준다.
+         *
+         * PIN 설정의 재입력 단계는 **다른 패턴**이어야 한다. 같은 표시를 쓰면
+         * 사용자는 1차 입력이 끝났는지, 다시 눌러야 하는지 알 방법이 없다.
+         * 실기기에서 실제로 여기서 멈췄다 — 6자리를 넣고 기다리다 만료됐다. */
+        if (r->kind == NU_APPROVAL_PIN_NEW && r->stage == 1) {
+            nu_leds(w, ((now_ms / 300) & 1) ? 0x05 : 0x0a);   /* 번갈아 — "한 번 더" */
+        } else {
+            nu_leds(w, ((now_ms / 500) & 1) ? 0x0f : 0x00);   /* 다 같이 — "누르세요" */
+        }
         return;
     }
 
