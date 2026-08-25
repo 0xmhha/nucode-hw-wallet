@@ -86,8 +86,30 @@ void setup() {
 #endif
 }
 
+/* 부팅 직후 LED 자기진단.
+ *
+ * "LED 가 이상하다" 를 말로 주고받으면 극성인지 매핑인지 점멸 로직인지 구분이
+ * 안 된다. 하나씩 2초간 켜고 이름을 시리얼에도 찍으면 한 번에 확정된다.
+ * 끝나면 평소대로 지갑이 돈다. LED_SELFTEST_MS 를 0 으로 두면 건너뛴다. */
+static bool led_selftest(uint32_t now) {
+#if LED_SELFTEST_MS
+  if (now >= LED_SELFTEST_MS) return false;
+  const uint32_t step = now / 2000;          // 2초마다 한 칸
+  uint8_t mask = 0;
+  if (step < 4)      mask = (uint8_t)(1u << step);   // LED1 -> LED2 -> LED3 -> LED4
+  else if (step < 5) mask = 0x00;                    // 전부 꺼짐
+  else if (step < 6) mask = 0x0f;                    // 전부 켜짐
+  else               mask = 0x00;
+  HAL.leds(mask, HAL.ctx);
+  return true;
+#else
+  (void)now; return false;
+#endif
+}
+
 void loop() {
   const uint32_t now = millis();
+  if (led_selftest(now)) return;
 
   // 버튼 — 눌림 엣지 하나를 코어에 넘긴다. 공장 초기화의 "붙잡고 있음" 은
   // 코어가 HAL 의 buttons() 로 직접 본다.

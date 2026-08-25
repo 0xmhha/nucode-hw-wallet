@@ -113,6 +113,14 @@ int nuble_paired(void) {
 void nuble_begin(const char *device_name, nu_wallet *w) {
     g_wallet = w;
     Bluefruit.begin();
+
+    /* Bluefruit 은 기본으로 LED_CONN(= PIN_LED2)을 광고·연결 표시로 혼자
+     * 깜빡인다. 그러면 LED2 의 주인이 둘이 되어, 코어가 그리는 표시 위에
+     * 엉뚱한 점멸이 겹친다. 실기기에서 "LED 하나만 점멸이 아니다" 로 드러났다.
+     * LED 4개는 전부 코어가 쓴다 — 화면이 없는 기기에서 유일한 출력 채널이라
+     * 다른 것이 끼어들면 안 된다. */
+    Bluefruit.autoConnLed(false);
+
     Bluefruit.setTxPower(4);
     Bluefruit.setName(device_name);
     Bluefruit.Periph.setConnectCallback(on_connect);
