@@ -20,6 +20,7 @@ import {
   encodeRequest, decodeResponse, decodeEvent, TAG, SW, WalletError,
 } from '../dist/protocol.js';
 import { mnemonicToIndices } from '../dist/wordlist.js';
+import { encode1559Unsigned, encode1559Signed, encodeAccessList } from '../dist/rlp.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FW = resolve(HERE, '../../firmware/test');
@@ -268,6 +269,60 @@ for (const suite of SUITES) describe(suite.name, () => {
       wallet.signTransaction('ethereum', ETH_PATH, tx, 1, { timeoutMs: 5000 }));
     assert.equal(sig.v, sig.recid + 1 * 2 + 35);
     assert.equal(sig.serialized.length, 2 + 65 * 2);
+  });
+
+  test('0x30 SIGN_TX — SDK 가 만든 EIP-1559 를 펌웨어 파서가 받아들인다', async () => {
+    // SDK 의 인코더(rlp.ts)와 기기의 파서(core/rlp.c)는 따로 짠 코드다. 둘이
+    // 같은 형식을 뜻하는지 확인할 방법은 실제로 물려 보는 것뿐이다. 기기는
+    // 항목 수·순서·accessList 가 리스트인지까지 본다 (rlp.c 의 type 2 가지).
+    const tx = encode1559Unsigned({
+      chainId: 1, nonce: 9n,
+      maxPriorityFeePerGas: 1_500_000_000n, maxFeePerGas: 30_000_000_000n,
+      gas: 21000n,
+      to: fromHexStr('3535353535353535353535353535353535353535'),
+      value: 1_000_000_000_000_000_000n,
+      data: new Uint8Array(),
+      accessList: encodeAccessList([{
+        address: '0x' + 'ab'.repeat(20),
+        storageKeys: ['0x' + '01'.repeat(32)],
+      }]),
+    });
+
+    const sig = await withApproval(bt, () =>
+      wallet.signTransaction('ethereum', ETH_PATH, tx, undefined, { timeoutMs: 5000 }));
+
+    // typed 트랜잭션의 v 는 yParity 다. EIP-155 처럼 chainId 를 섞으면 안 된다.
+    assert.ok(sig.v === 0 || sig.v === 1, `typed v 는 yParity 여야 한다 (v=${sig.v})`);
+    assert.equal(sig.v, sig.recid);
+    assert.equal(sig.serialized.length, 2 + 65 * 2);
+
+    // 최종 바이트도 기기가 서명한 것과 같은 본문을 담아야 한다.
+    const raw = encode1559Signed(
+      {
+        chainId: 1, nonce: 9n,
+        maxPriorityFeePerGas: 1_500_000_000n, maxFeePerGas: 30_000_000_000n,
+        gas: 21000n,
+        to: fromHexStr('3535353535353535353535353535353535353535'),
+        value: 1_000_000_000_000_000_000n,
+        data: new Uint8Array(),
+        accessList: encodeAccessList([{
+          address: '0x' + 'ab'.repeat(20),
+          storageKeys: ['0x' + '01'.repeat(32)],
+        }]),
+      },
+      sig.v, fromHexStr(sig.r.slice(2)), fromHexStr(sig.s.slice(2)));
+    assert.equal(raw[0], 0x02);
+    // 서명 세 항목이 더 붙으므로 반드시 길어진다. 바깥 리스트 길이 접두사가
+    // 달라져서 앞부분 바이트를 그대로 비교할 수는 없다.
+    assert.ok(raw.length > tx.length + 64, `서명본이 짧다 (${raw.length} vs ${tx.length})`);
+  });
+
+  test('0x30 SIGN_TX — 항목이 모자란 type 2 는 거부한다', async () => {
+    // accessList 를 빼면 여덟 항목이 된다. 기기가 형식을 실제로 보는지 확인.
+    const short = new Uint8Array([0x02, 0xc4, 0x01, 0x09, 0x01, 0x02]);
+    await assert.rejects(
+      () => wallet.signTransaction('ethereum', ETH_PATH, short, undefined, { timeoutMs: 5000 }),
+      (e) => e instanceof WalletError && e.status === SW.BAD_PARAM);
   });
 
   test('0x30 SIGN_TX — RLP 이 아니면 기기가 거부한다', async () => {
