@@ -9,9 +9,11 @@
  * 만들어 보드에 보내고, 보드가 버튼 승인을 받아 서명한 것을 돌려받아 RPC 로
  * 흘려보낼 뿐이다.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { NuWallet, NuWalletProvider, WalletError } from '@/sdk/src/index';
+import {
+  NuWallet, NuWalletProvider, WalletError, announceNuWalletProvider, hashTypedData, hex,
+} from '@/sdk/src/index';
 import s from './dapp.module.css';
 import { WebAppFooter } from '../components/WebAppFooter';
 
@@ -56,7 +58,7 @@ export default function DappDemo() {
 
   /** 설정이 바뀌면 provider 를 새로 만든다. chainId 는 서명에 들어가므로
    *  옛 설정으로 서명하는 일이 없어야 한다. */
-  const provider = useCallback(() => {
+  const provider = useMemo(() => {
     const p = new NuWalletProvider(wallet, {
       chainId: Number(chainId) || 0,
       rpcUrl: rpcUrl || undefined,
@@ -70,6 +72,12 @@ export default function DappDemo() {
     providerRef.current = p;
     return p;
   }, [wallet, chainId, rpcUrl, path]);
+
+  /* EIP-6963. 이게 없으면 DApp 이 `window.ethereum` 을 통해서만 지갑을 찾고,
+   * 확장 지갑이 이미 그 자리를 차지하고 있으면 NuWallet 은 보이지 않는다.
+   * 여기서 알려 두면 선택기를 쓰는 DApp 이 목록에 NuWallet 을 띄운다.
+   * 설정이 바뀌어 provider 가 새로 생기면 옛 것의 등록을 지우고 다시 알린다. */
+  useEffect(() => announceNuWalletProvider(provider), [provider]);
 
   const run = useCallback(async (label: string, task: () => Promise<void>) => {
     setBusy(true);
@@ -99,7 +107,7 @@ export default function DappDemo() {
     if (!NuWallet.isSupported) {
       throw new Error('Web Bluetooth 를 지원하지 않습니다. Chrome/Edge 의 HTTPS 또는 localhost 에서 열어주세요.');
     }
-    const p = provider();
+    const p = provider;
     const accounts = await p.request({ method: 'eth_requestAccounts' }) as string[];
     const addr = accounts[0] ?? '';
     setAccount(addr);
@@ -120,7 +128,7 @@ export default function DappDemo() {
   }
 
   const reload = () => run('상태 갱신', async () => {
-    const p = providerRef.current ?? provider();
+    const p = provider;
     if (!account) throw new Error('먼저 지갑을 연결하세요.');
     await refresh(p, account);
     setStatus('최신 상태로 갱신했습니다.');
@@ -169,9 +177,53 @@ export default function DappDemo() {
     setStatus('메시지에 서명했습니다.');
   });
 
+  /** EIP-712. SDK 가 구조체를 두 해시로 줄이고, 보드는 그 둘만 받아 서명한다.
+   *  permit 을 쓰는 DApp 이 실제로 거치는 경로가 이것이다. */
+  const signTypedData = () => run('eth_signTypedData_v4', async () => {
+    const typed = {
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' },
+        ],
+        Permit: [
+          { name: 'owner', type: 'address' },
+          { name: 'spender', type: 'address' },
+          { name: 'value', type: 'uint256' },
+          { name: 'nonce', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+        ],
+      },
+      primaryType: 'Permit',
+      domain: {
+        name: 'NuWallet Demo Token',
+        version: '1',
+        chainId: Number(chainId) || 0,
+        verifyingContract: '0x0000000000000000000000000000000000000001',
+      },
+      message: {
+        owner: account,
+        spender: to.trim() || '0x0000000000000000000000000000000000000002',
+        value: parseEther(value || '0').toString(),
+        nonce: '0',
+        deadline: String(Math.floor(Date.now() / 1000) + 3600),
+      },
+    };
+    const hashes = hashTypedData(typed);
+    say('out', `domainSeparator ${hex(hashes.domainSeparator)}`);
+    say('out', `messageHash     ${hex(hashes.messageHash)}`);
+    const sig = await providerOrThrow().request({
+      method: 'eth_signTypedData_v4', params: [account, JSON.stringify(typed)],
+    }) as string;
+    say('in', `서명 ${sig}`);
+    setStatus('EIP-712 구조체에 서명했습니다.');
+  });
+
   function providerOrThrow(): NuWalletProvider {
     if (!account) throw new Error('먼저 지갑을 연결하세요.');
-    return providerRef.current ?? provider();
+    return provider;
   }
 
   function txParams() {
@@ -334,6 +386,17 @@ export default function DappDemo() {
           <div className={s.buttons}>
             <button className={s.btn} onClick={personalSign} disabled={busy || !account}>
               메시지 서명
+            </button>
+          </div>
+
+          <p className={s.hint}>
+            <code>eth_signTypedData_v4</code> (EIP-712). 아래 버튼은 ERC-2612
+            <code>Permit</code> 을 위 폼의 값으로 채워 서명합니다. 보드는 32바이트 해시
+            두 개만 받으므로, <strong>무엇에 서명하는지는 이 화면에서만 볼 수 있습니다.</strong>
+          </p>
+          <div className={s.buttons}>
+            <button className={s.btn} onClick={signTypedData} disabled={busy || !account}>
+              Permit 서명 (EIP-712)
             </button>
           </div>
         </section>
