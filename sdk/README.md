@@ -33,6 +33,63 @@ const txHash = await provider.request({
 `NuWallet (NU-40 DK)`가 나타난다. DApp이 `window.ethereum`에 직접 의존하지
 않아도 되며 MetaMask와 NuWallet을 같은 목록에서 선택할 수 있다.
 
+## 트랜잭션 형식 — legacy 와 EIP-1559
+
+provider 가 알아서 고른다. 최신 블록에 `baseFeePerGas` 가 있으면 type 2 로,
+없으면 legacy 로 낸다. 확인은 한 번만 하고 기억한다.
+
+호출자가 뜻을 밝히면 그쪽을 따른다. `gasPrice` 를 주면 legacy 로,
+`maxFeePerGas` 계열이나 `type: '0x2'` 를 주면 type 2 로 낸다.
+
+```js
+// 노드가 정하게 둔다
+await provider.request({ method: 'eth_sendTransaction', params: [{ from, to, value }] });
+
+// type 2 로 직접 지정
+await provider.request({
+  method: 'eth_sendTransaction',
+  params: [{ from, to, value, maxFeePerGas: '0x77359400', maxPriorityFeePerGas: '0x3b9aca00' }],
+});
+```
+
+기기는 해시가 아니라 **직렬화된 트랜잭션 자체**를 받아 스스로 Keccak 한다.
+그래서 `0x02 ‖ RLP([…])` 의 항목 수와 순서가 틀리면 서명되지 않고 거부된다.
+
+## EIP-712 구조체 서명
+
+```js
+const sig = await provider.request({
+  method: 'eth_signTypedData_v4',
+  params: [from, JSON.stringify(typedData)],
+});
+```
+
+`domain.chainId` 가 연결된 체인과 다르면 서명하지 않고 4901 로 거절한다.
+기기는 해시 두 개만 보므로, 이 확인을 여기서 하지 않으면 아무 데서도 못 한다.
+
+해시만 필요하면 따로 쓸 수 있다.
+
+```js
+import { hashTypedData } from '@nucode/hw-wallet';
+const { domainSeparator, messageHash, digest } = hashTypedData(typedData);
+```
+
+## 오류 — EIP-1193 코드
+
+`provider.request()` 가 던지는 것은 `ProviderRpcError` 이고 `code` 로 분기한다.
+
+| code | 언제 |
+|---|---|
+| `4001` | 사용자가 거부했거나, 버튼 순서를 틀렸거나, 승인 시간이 지났다 |
+| `4100` | 기기가 잠겨 있거나 PIN 이 필요하거나 지갑이 아직 없다 |
+| `4200` | 펌웨어가 모르는 명령이거나 지원하지 않는 체인이다 |
+| `4901` | 서명 요청의 체인이 연결된 체인과 다르다 |
+| `4902` | DApp 이 다른 체인으로 바꾸라고 했다 |
+| `-32602` | 요청 형식이 잘못됐다 |
+| `-32603` | 기기 내부 오류 |
+
+원래 기기 오류는 `error.data` 에 `WalletError` 로 남는다.
+
 ## Solana web3.js
 
 ```js

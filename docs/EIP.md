@@ -12,13 +12,13 @@
 
 | EIP | 무엇 | 왜 지갑에 필요한가 | 상태 | 위치 |
 |---|---|---|---|---|
-| **EIP-155** | 트랜잭션에 `chainId` 를 넣고 `v = recid + chainId*2 + 35` | 없으면 **한 체인의 서명이 다른 체인에서 그대로 재생**된다. 테스트넷 서명이 메인넷에서 통한다 | ✅ | `rlp.c` (9항목 검증) · `client.ts:309` |
-| **EIP-2** | `s ≤ n/2` (low-s) 정규화 | 안 하면 같은 트랜잭션에 유효 서명이 두 개 생겨 **해시가 달라진다**(가변성). 노드가 거부하기도 한다 | ✅ | `ecdsa.c:89` — 뒤집을 때 `recid` bit0 도 함께 뒤집는다 |
-| **EIP-191** | `personal_sign` 접두사 `\x19Ethereum Signed Message:\n<len>` | 접두사가 없으면 **서명 요청이 트랜잭션으로 둔갑**할 수 있다. 로그인 서명이 송금 서명이 되는 공격 | ✅ | `wallet.c:634` — 기기가 접두사를 직접 붙인다 |
-| **EIP-712** | 구조체 데이터 서명 `\x19\x01 ‖ domainSeparator ‖ hashStruct` | 사람이 읽을 수 있는 서명. permit·주문 서명이 전부 이걸 쓴다 | 🟡 | 기기는 두 해시를 받아 서명 (`0x32`). **SDK 에 구조체 인코딩이 없다** |
-| **EIP-2718** | 타입 있는 트랜잭션 봉투 `type ‖ payload` | 이후의 모든 새 트랜잭션 형식이 이 위에 올라간다 | 🟡 | 기기는 `0x01`/`0x02` 를 파싱·검증 (`rlp.c:78`). **SDK 가 만들지 않는다** |
-| **EIP-1559** | type 2, `maxFeePerGas`/`maxPriorityFeePerGas` | 2021년 이후 **사실상 표준 트랜잭션**. legacy 만 지원하면 수수료를 과다 지불한다 | 🟡 | 기기는 파싱 가능 (`rlp.c:105`). **SDK provider 는 legacy 만 만든다** |
-| **EIP-2930** | type 1, access list | 1559 의 앞 세대. 실사용은 적다 | 🟡 | 기기 파싱만 |
+| **EIP-155** | 트랜잭션에 `chainId` 를 넣고 `v = recid + chainId*2 + 35` | 없으면 **한 체인의 서명이 다른 체인에서 그대로 재생**된다. 테스트넷 서명이 메인넷에서 통한다 | ✅ | `core/rlp.c` (9항목 검증) · `client.ts:353` |
+| **EIP-2** | `s ≤ n/2` (low-s) 정규화 | 안 하면 같은 트랜잭션에 유효 서명이 두 개 생겨 **해시가 달라진다**(가변성). 노드가 거부하기도 한다 | ✅ | `crypto/ecdsa.c:89` — 뒤집을 때 `recid` bit0 도 함께 뒤집는다 |
+| **EIP-191** | `personal_sign` 접두사 `\x19Ethereum Signed Message:\n<len>` | 접두사가 없으면 **서명 요청이 트랜잭션으로 둔갑**할 수 있다. 로그인 서명이 송금 서명이 되는 공격 | ✅ | `core/commands.c:346` — 기기가 접두사를 직접 붙인다 |
+| **EIP-712** | 구조체 데이터 서명 `\x19\x01 ‖ domainSeparator ‖ hashStruct` | 사람이 읽을 수 있는 서명. permit·주문 서명이 전부 이걸 쓴다 | ✅ | `eip712.ts` 가 구조체를 두 해시로 줄이고 기기가 `0x32` 로 서명한다. EIP 본문의 Mail 예제로 검증 (`eip712.test.js`) |
+| **EIP-2718** | 타입 있는 트랜잭션 봉투 `type ‖ payload` | 이후의 모든 새 트랜잭션 형식이 이 위에 올라간다 | ✅ | 기기가 `0x01`/`0x02` 를 파싱·검증하고 (`core/rlp.c`), SDK 가 `0x02` 를 만든다. 적합성 테스트가 둘을 물려서 확인한다 |
+| **EIP-1559** | type 2, `maxFeePerGas`/`maxPriorityFeePerGas` | 2021년 이후 **사실상 표준 트랜잭션**. legacy 만 지원하면 수수료를 과다 지불한다 | ✅ | `rlp.ts` 의 `encode1559Unsigned`. provider 가 최신 블록에 `baseFeePerGas` 가 있으면 type 2 로, 없으면 legacy 로 낸다 |
+| **EIP-2930** | type 1, access list | 1559 의 앞 세대. 실사용은 적다 | 🟡 | 기기가 파싱한다. accessList 자체는 `encodeAccessList` 로 type 2 안에 실어 보낼 수 있다. type 1 단독 생성은 없다 |
 | **EIP-7702** | type 4, EOA 에 코드 위임 | 2025 Pectra. 지갑이 모르면 **사용자가 서명하는 위임을 막을 수 없다** | ❌ | 기기가 `BAD_PARAM` 으로 거부 — 모르는 걸 서명하지 않으므로 안전한 실패 |
 | EIP-4844 | type 3, blob | 롤업 제출자용. 일반 지갑엔 불필요 | ➖ | |
 
@@ -34,18 +34,18 @@
 | **EIP-55** | 대소문자 체크섬 주소 | ✅ | `address.ts:69` |
 | BIP-32 / BIP-39 / BIP-44 | 계층 결정적 파생, 니모닉 | ✅ | `crypto/` — 공식 벡터로 검증 |
 | SLIP-44 | coin type 60 = Ethereum (`m/44'/60'/0'/0/0`) | ✅ | `protocol.ts` `DEFAULT_PATHS` |
-| SLIP-0010 | ed25519 파생 (Solana) | 🟡 | `crypto/slip10.c` 는 있으나 **지갑 코어에 연결되지 않음** |
+| SLIP-0010 | ed25519 파생 (Solana) | ✅ | `crypto/slip10.c` 가 코어에 붙어 있다. 실기기에서 Ed25519 서명을 외부 라이브러리로 검증했다 |
 
 ## 3. DApp 연결 — 지갑이 "쓸 수 있는" 것이 되는 부분
 
 | EIP | 무엇 | 왜 필요한가 | 상태 | 위치 |
 |---|---|---|---|---|
-| **EIP-1193** | provider JS API (`request`/`on`) | 이게 없으면 DApp 이 지갑에 붙는 표준 방법이 없다 | ✅ | `provider.ts:44` |
-| **EIP-1102** | `eth_requestAccounts` — 사용자 동의 후 계정 노출 | 동의 없이 주소를 주면 추적된다 | ✅ | `provider.ts:77` |
-| **EIP-695** | `eth_chainId` | DApp 이 체인을 확인하는 표준 | ✅ | `provider.ts:88` |
-| **EIP-6963** | 여러 지갑을 DApp 이 발견하는 방법 | 없으면 `window.ethereum` 을 두고 다른 지갑과 **덮어쓰기 싸움**을 한다 | 🟡 | `browser.ts` 에 `announceNuWalletProvider()` 가 있으나 **웹 어디서도 호출하지 않는다** |
+| **EIP-1193** | provider JS API (`request`/`on`) | 이게 없으면 DApp 이 지갑에 붙는 표준 방법이 없다 | ✅ | `provider.ts:73` |
+| **EIP-1102** | `eth_requestAccounts` — 사용자 동의 후 계정 노출 | 동의 없이 주소를 주면 추적된다 | ✅ | `provider.ts:122` |
+| **EIP-695** | `eth_chainId` | DApp 이 체인을 확인하는 표준 | ✅ | `provider.ts:133` |
+| **EIP-6963** | 여러 지갑을 DApp 이 발견하는 방법 | 없으면 `window.ethereum` 을 두고 다른 지갑과 **덮어쓰기 싸움**을 한다 | ✅ | 예제 DApp 이 provider 가 바뀔 때마다 다시 알린다 (`app/dapp/page.tsx`) |
 | **EIP-3085 / 3326** | `wallet_addEthereumChain` / `wallet_switchEthereumChain` | DApp 이 네트워크 전환을 요청하는 표준 | ❌ | 지금은 웹 UI 에서 수동 설정 |
-| **EIP-1474** | JSON-RPC 오류 코드 (4001 사용자 거부 등) | DApp 이 "사용자가 거부"와 "기기 오류"를 구분해야 한다 | 🟡 | `WalletError.status` 는 있으나 **1193 오류 코드로 변환하지 않는다** |
+| **EIP-1474** | JSON-RPC 오류 코드 (4001 사용자 거부 등) | DApp 이 "사용자가 거부"와 "기기 오류"를 구분해야 한다 | ✅ | `provider.ts` 가 기기 상태 코드를 4001·4100·4200·-32602·-32603 으로 바꾼다. 승인 시간 초과와 버튼 실패도 4001 이다 |
 | **EIP-4361** | Sign-In with Ethereum | `personal_sign` 위에서 동작 — 별도 구현 불필요 | ✅ | EIP-191 경로 그대로 |
 
 ## 4. 이 하드웨어로는 못 하는 것
@@ -61,15 +61,22 @@
 
 ## 5. 우선순위
 
-지금 상태에서 실제로 막히는 순서대로.
+1~4번이 끝나서 다음 차례는 이렇다.
 
-1. **EIP-1559 (type 2) 트랜잭션 생성** — 기기는 이미 파싱한다. SDK provider 만
-   고치면 된다. 지금은 legacy 라 수수료가 비싸고, 일부 체인은 legacy 를 아예 안 받는다
-2. **EIP-712 구조체 인코딩** — 기기는 준비됐다. SDK 에 `hashStruct`/`encodeType`
-   가 없어 `eth_signTypedData_v4` 가 그냥 던진다. permit 류를 아예 못 쓴다
-3. **EIP-1474 오류 코드 매핑** — DApp 이 사용자 거부(4001)를 구분 못 한다
-4. **EIP-6963 연결** — 구현은 있는데 아무도 부르지 않는다. 예제 DApp 에서
-   `announceNuWalletProvider()` 를 호출하고 발견 흐름을 보여주면 끝
-5. EIP-3085/3326 — 네트워크 전환
+1. **EIP-3085 / 3326 네트워크 전환** — 지금은 웹 UI 에서 수동으로 chainId 와 RPC 를
+   바꾼다. DApp 이 `wallet_switchEthereumChain` 을 보내면 4902 로 거절한다
+2. **EIP-2930 (type 1) 단독 생성** — accessList 는 이미 인코딩할 수 있으니
+   봉투만 붙이면 된다. 실사용이 적어 뒤로 미뤄 뒀다
+3. **EIP-7702 (type 4)** — 지금은 기기가 `BAD_PARAM` 으로 거부한다.
+   모르는 것을 서명하지 않으므로 **안전한 실패**이지만, 사용자가 위임을
+   쓰려 하면 아무 설명 없이 막힌다
+
+### 이미 된 것 (2026-09-06)
+
+EIP-1559 트랜잭션 생성, EIP-712 구조체 인코딩, EIP-1193 오류 코드 변환,
+EIP-6963 발표를 모두 넣었다. 근거는 각 항목의 표에 적었고, 특히 EIP-1559 는
+**SDK 가 만든 바이트를 펌웨어 파서에 실제로 먹여서** 확인한다
+(`sdk/test/conformance.test.js`) — 인코더와 파서를 따로 짰기 때문에 서로
+같은 형식을 뜻하는지 확인할 다른 방법이 없다.
 
 자세한 작업 항목은 `docs/TASKS.md`.
