@@ -23,17 +23,25 @@ const args = new Set(process.argv.slice(2));
 /* ── 계층 정의 ───────────────────────────────────────────────────────────
    위에서부터 순서대로 매칭한다. 아래 화살표는 "이 계층이 의존해도 되는 곳". */
 const LAYERS = [
-  { id: 'fw.core',    match: /^firmware\/wallet\/src\/app\//,            may: ['fw.core', 'fw.crypto'] },
-  { id: 'fw.port',    match: /^firmware\/wallet\/src\/port\//,           may: ['fw.port', 'fw.core', 'fw.crypto'] },
-  { id: 'fw.entry',   match: /^firmware\/wallet\/src\/main\.c$/,         may: ['fw.core', 'fw.port'] },
+  // 코어는 Arduino 스케치 안에 있다. arduino-cli 가 스케치 폴더 밖을 컴파일하지
+  // 못해서지, 코어가 Arduino 에 묶여 있어서가 아니다 — 순수 C 이고 Zephyr
+  // CMakeLists 도 같은 파일을 컴파일한다.
+  { id: 'fw.core',    match: /^firmware\/nuwallet\/src\/core\//,          may: ['fw.core', 'fw.crypto'] },
+  // 호스트 포트는 보드에 올라가지 않는다. firmware/test 전용이라 테스트 쪽
+  // 대역(ed25519 스텁)을 가져다 써도 된다. 보드용 포트와 섞이면 안 되므로
+  // 계층을 따로 둔다.
+  { id: 'fw.host',    match: /^firmware\/wallet\/src\/port\/host\//,
+                      may: ['fw.core', 'fw.crypto', 'fw.test'] },
+  { id: 'fw.port',    match: /^firmware\/(nuwallet\/src\/(port|transport)|wallet\/src\/port)\//,
+                      may: ['fw.port', 'fw.core', 'fw.crypto', 'fw.chains', 'fw.entry'] },
+  { id: 'fw.entry',   match: /^firmware\/(wallet\/src\/main\.c|nuwallet\/(nuwallet\.ino|config\.h))$/,
+                      may: ['fw.core', 'fw.port'] },
   { id: 'fw.crypto',  match: /^firmware\/nuwallet\/src\/(crypto|micro-ecc)\//, may: ['fw.crypto'] },
   { id: 'fw.chains',  match: /^firmware\/nuwallet\/src\/chains\//,       may: ['fw.chains', 'fw.crypto'] },
-  { id: 'fw.arduino', match: /^firmware\/nuwallet\/(nuwallet\.ino|config\.h|src\/(controller|storage|transport|ui)\/)/,
-                      may: ['fw.arduino', 'fw.crypto', 'fw.chains'] },
   { id: 'fw.test',    match: /^firmware\/test\//,                        may: ['*'] },
   { id: 'fw.demo',    match: /^firmware\/(src|arduino)\//,               may: ['*'] },
 
-  { id: 'sdk.codec',  match: /^sdk\/src\/(protocol|rlp|address|wordlist|networks|types|web-bluetooth)\./, may: ['sdk.codec'] },
+  { id: 'sdk.codec',  match: /^sdk\/src\/(protocol|rlp|address|eip712|wordlist|networks|types|web-bluetooth)\./, may: ['sdk.codec'] },
   { id: 'sdk.link',   match: /^sdk\/src\/(transport|browser)\./,         may: ['sdk.codec', 'sdk.link'] },
   { id: 'sdk.client', match: /^sdk\/src\/(client|pin|solana)\./,         may: ['sdk.codec', 'sdk.link', 'sdk.client'] },
   { id: 'sdk.dapp',   match: /^sdk\/src\/provider\./,                    may: ['sdk.codec', 'sdk.link', 'sdk.client', 'sdk.dapp'] },
