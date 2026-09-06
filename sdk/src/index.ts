@@ -25,7 +25,13 @@ export {
 export {
   rlpEncode, toRlpInt, stripZeros,
   encodeLegacyUnsigned, encodeLegacySigned, type LegacyTx,
+  encode1559Unsigned, encode1559Signed, encodeAccessList,
+  type Eip1559Tx, type AccessListItem,
 } from './rlp.js';
+export {
+  encodeType, typeHash, hashStruct, domainSeparator, hashTypedData,
+  type TypedData, type TypedTypes, type TypedField, type TypedDataHashes,
+} from './eip712.js';
 export type {
   DeviceInfo, DeviceState, AccountInfo, Signature,
   SignOptions, ChallengeCallbacks, Eip1193Provider,

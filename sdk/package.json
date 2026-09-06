@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test test/protocol.test.js test/transport.test.js test/pin.test.js test/networks.test.js test/wordlist.test.js test/conformance.test.js",
+    "test": "node --test test/protocol.test.js test/transport.test.js test/pin.test.js test/networks.test.js test/wordlist.test.js test/rlp.test.js test/eip712.test.js test/provider.test.js test/adapters.test.js test/conformance.test.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "npm run build && make -C ../firmware/test protocol_bridge",
     "test:device": "node --test test/device.test.js",
