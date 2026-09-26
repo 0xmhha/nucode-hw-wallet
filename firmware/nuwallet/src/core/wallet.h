@@ -96,6 +96,14 @@ void nu_wallet_disconnected(nu_wallet *w);
 
 uint8_t nu_wallet_flags(const nu_wallet *w);
 
+/** 기기 고유 광고 이름. prefix 뒤에 문자와 숫자가 번갈아 6자 붙는다.
+ *
+ * id0, id1 은 칩마다 다르고 바뀌지 않는 값이다 (nRF52 는 FICR DEVICEID[0], [1]).
+ * 헷갈리는 I, O, 0, 1 은 쓰지 않는다. Arduino 와 Zephyr 가 이 함수를 같이 써서,
+ * 같은 보드는 어느 펌웨어를 올려도 같은 이름으로 보인다. */
+void nu_device_name(uint32_t id0, uint32_t id1, const char *prefix,
+                    char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

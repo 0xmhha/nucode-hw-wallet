@@ -34,21 +34,11 @@ static nu_wallet W;
 static char      g_name[24];
 
 // ── 기기 이름 ────────────────────────────────────────────────────────────────
-// DEVICEID 로 보드마다 고유하게, 재부팅해도 동일하게.
+// DEVICEID 로 보드마다 고유하게, 재부팅해도 동일하게. 규칙은 코어에 있다 —
+// Zephyr 포트도 같은 함수를 써서, 같은 보드는 어느 펌웨어든 같은 이름이다.
 static void make_name() {
-  static const char AB[] = "ABCDEFGHJKLMNPQRSTUVWXYZ";  // I, O 제외
-  static const char NU[] = "23456789";                  // 0, 1 제외
-  uint32_t id0 = NRF_FICR->DEVICEID[0];
-  uint32_t id1 = NRF_FICR->DEVICEID[1];
-  uint32_t h = id0 ^ (id1 * 2654435761UL);
-  char sfx[7];
-  for (int i = 0; i < 6; i++) {
-    if (i % 2 == 0) { sfx[i] = AB[h % 24]; h /= 24; }
-    else            { sfx[i] = NU[h % 8];  h /= 8;  }
-    if (h == 0) h = id1 ^ (uint32_t)(i * 0x9E3779B9UL);
-  }
-  sfx[6] = 0;
-  snprintf(g_name, sizeof g_name, "%s%s", BLE_NAME_PREFIX, sfx);
+  nu_device_name(NRF_FICR->DEVICEID[0], NRF_FICR->DEVICEID[1],
+                 BLE_NAME_PREFIX, g_name, sizeof g_name);
 }
 
 // 코어의 hal->send 가 이걸 부른다. 프레이밍은 전송 계층이 한다.

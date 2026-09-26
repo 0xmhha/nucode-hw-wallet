@@ -34,6 +34,11 @@ static void check_hex(const char *name, const uint8_t *got, size_t n, const char
     if (strcmp(g, want) == 0) printf("  ok   %s\n", name);
     else { printf("  FAIL %s\n       got  %s\n       want %s\n", name, g, want); fails++; }
 }
+static void eq_str(const char *name, const char *got, const char *want) {
+    total++;
+    if (strcmp(got, want) == 0) printf("  ok   %s (%s)\n", name, got);
+    else { printf("  FAIL %s\n       got  %s\n       want %s\n", name, got, want); fails++; }
+}
 static size_t unhex(const char *h, uint8_t *out) {
     size_t n = strlen(h) / 2;
     for (size_t i = 0; i < n; i++) { unsigned v; sscanf(h + i * 2, "%2x", &v); out[i] = (uint8_t)v; }
@@ -834,6 +839,28 @@ static void test_bad_input(void) {
     ok("범위 밖 버튼은 무시된다", W.req.cmd == before);
 }
 
+/* 광고 이름은 Arduino 와 Zephyr 가 같은 칩에서 같은 값을 내야 한다. 기대값은
+ * 코어로 옮기기 전 nuwallet.ino 의 make_name() 이 낸 것이다. 바꾸면 사용자가
+ * 알던 기기 이름이 바뀐다. */
+static void test_device_name(void) {
+    puts("지갑  기기 이름");
+    static const struct { uint32_t id0, id1; const char *want; } v[] = {
+        {0x00000000u, 0x00000000u, "NuWallet-A2K4L3"},
+        {0x00000001u, 0x00000000u, "NuWallet-B2K4L3"},
+        {0x12345678u, 0x9abcdef0u, "NuWallet-S7W5A3"},
+        {0xffffffffu, 0xffffffffu, "NuWallet-A4L3G2"},
+        {0xdeadbeefu, 0x00000000u, "NuWallet-Z3K6R8"},
+    };
+    char name[24];
+    for (size_t i = 0; i < sizeof v / sizeof v[0]; i++) {
+        nu_device_name(v[i].id0, v[i].id1, "NuWallet-", name, sizeof name);
+        eq_str("옛 make_name() 과 같은 이름", name, v[i].want);
+    }
+    char small[8];
+    nu_device_name(1, 2, "NuWallet-", small, sizeof small);
+    ok("버퍼가 작으면 잘라서 끝낸다", strlen(small) == sizeof small - 1);
+}
+
 int main(void) {
     puts("");
     test_framing();
@@ -846,6 +873,7 @@ int main(void) {
     test_leds();
     test_passphrase_and_wipe();
     test_bad_input();
+    test_device_name();
     printf("\n%d개 중 %d개 실패\n", total, fails);
     return fails ? 1 : 0;
 }
