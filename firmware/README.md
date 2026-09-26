@@ -12,7 +12,7 @@ NU-40 DK (nRF52840) 를 BLE 하드웨어 지갑으로 만드는 펌웨어.
 | **코어** (프로토콜·승인·저장·서명) | `nuwallet/src/core/` | 아래 두 포트와 호스트 테스트가 함께 컴파일 |
 | 공유 암호 라이브러리 | `nuwallet/src/{crypto,micro-ecc,chains}/` | 위와 같음 |
 | Arduino 포트 (보드에 올라가는 것) | `nuwallet/` (스케치) + `nuwallet/src/{port/arduino,transport}/` | `arduino-cli` — 바로 된다 |
-| Zephyr 포트 | `wallet/` | ⚠️ 보드 정의 필요 — 아래 참고 |
+| Zephyr 포트 | `wallet/` + `wallet/src/port/zephyr/` | `west` — 빌드는 되고 실기기 확인은 아직. Solana 없음 |
 | 호스트 포트 (테스트) | `wallet/src/port/host/` | `firmware/test` |
 
 코어는 `core/hal.h` 하나만 안다 — Arduino 도 Zephyr 도 모른다. 포트가 채우는 것은
@@ -37,9 +37,8 @@ scripts/build-firmware.sh                        # firmware/nuwallet/build/NUWAL
 scripts/build-firmware.sh /dev/cu.usbmodem1101   # 만들고 시리얼 DFU 로 올린다
 ```
 
-**Zephyr 앱(`firmware/wallet`)은 아직 이 저장소만으로는 빌드되지 않는다.** NU-40 DK
-보드 정의가 로컬 Zephyr 트리에 있고, 그것으로 빌드하게 만드는 것이 다음 작업이다
-(`docs/TASKS.md` T14). 코어는 `hal.h` 만 알기 때문에 두 포트가 같은 코어를 쓴다.
+Zephyr 포트는 `scripts/build-zephyr.sh` 로 빌드한다. 작업 공간을 만드는 법과, 올리면
+SoftDevice 를 덮어쓴다는 주의는 같은 설치 문서의 "Zephyr 로 빌드하기" 에 있다.
 
 ## 보드 없이 테스트
 

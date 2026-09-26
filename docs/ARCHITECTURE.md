@@ -49,7 +49,7 @@ firmware/
     src/chains/        체인별 해시 헬퍼
     src/port/arduino/  HAL (LED · 버튼 · LittleFS · TRNG · CryptoCell Ed25519)
     src/transport/     Bluefruit BLE GATT
-  wallet/            Zephyr 포트. 보드 정의가 없어 지금은 빌드되지 않는다 (TASKS T14)
+  wallet/            Zephyr 포트. 빌드는 되고 실기기 확인은 아직이다 (TASKS T14)
     src/port/zephyr/   BLE GATT · GPIO · NVS · CSPRNG
     src/port/host/     호스트 테스트용 HAL
   test/              호스트에서 도는 테스트. 보드도 SDK 도 필요 없다
@@ -60,7 +60,8 @@ cd firmware/test && make test     # 암호 스택 + 지갑 코어 (보드 불필
 ```
 
 보드에 올리는 방법은 `docs/nu40-dk-firmware-installation.md` 를 본다.
-**Zephyr 로는 지금 바로 빌드되지 않는다** — `nucode_nu40` 보드 정의가 없다.
+Zephyr 포트는 업스트림 보드 정의(`nucode_nu40/nrf52840`)로 빌드한다. 같은 문서의
+"Zephyr 로 빌드하기" 를 본다.
 
 핵심 원칙 셋:
 

@@ -173,10 +173,94 @@ scripts/build-firmware.sh /dev/cu.usbmodem1101
 
 ## Zephyr 로 빌드하기
 
-지금 보드에 올리는 것은 위의 Arduino 스케치다. `firmware/wallet` 의 Zephyr 앱은
-아직 이 저장소만으로는 빌드되지 않는다. NU-40 DK 용 보드 정의가 로컬 Zephyr 트리
-(`boards/nucode/nucode_nu40/`)에 있고, 그것으로 빌드하게 만드는 일이 다음 작업이다
+지금 보드에 올려 쓰는 것은 위의 Arduino 스케치다. `firmware/wallet` 의 Zephyr 앱은
+같은 코어를 쓰는 두 번째 포트이고, 빌드는 되지만 실기기 확인은 아직이다
 (`docs/TASKS.md` 의 T14).
+
+NU-40 보드 정의(`nucode_nu40/nrf52840`)는 Zephyr `main` 에 들어가 있다. 아직 어느
+릴리스에도 없어서 `firmware/wallet/west.yml` 이 검증한 커밋 하나에 고정한다.
+
+### 한 번만 할 준비
+
+Zephyr `main` 의 빌드 스크립트는 **Python 3.12 이상**이 필요하다. 3.10 으로 만들면
+`relative_to() got an unexpected keyword argument 'walk_up'` 으로 멈춘다.
+
+```sh
+brew install ninja dtc                       # macOS. cmake 도 없으면 같이 설치한다
+
+# Zephyr SDK — ARM 툴체인만 받는다 (전체 번들은 1.8GB)
+cd ~
+gh release download v1.0.1 -R zephyrproject-rtos/sdk-ng \
+  -p 'zephyr-sdk-1.0.1_macos-aarch64_minimal.tar.xz' \
+  -p 'toolchain_gnu_macos-aarch64_arm-zephyr-eabi.tar.xz'
+tar xf zephyr-sdk-1.0.1_macos-aarch64_minimal.tar.xz
+mkdir -p zephyr-sdk-1.0.1/gnu
+tar xf toolchain_gnu_macos-aarch64_arm-zephyr-eabi.tar.xz -C zephyr-sdk-1.0.1/gnu
+zephyr-sdk-1.0.1/setup.sh -c                 # CMake 가 SDK 를 찾게 등록한다
+
+# west 작업 공간 — 모듈은 west.yml 이 고른 다섯 개만 받는다 (약 1.3GB)
+python3.13 -m venv ~/zephyr-nu/.venv
+. ~/zephyr-nu/.venv/bin/activate
+pip install west
+west init -m https://github.com/0xmhha/nucode-hw-wallet --mf firmware/wallet/west.yml ~/zephyr-nu
+cd ~/zephyr-nu && west update
+pip install -r zephyr/scripts/requirements-base.txt
+```
+
+Linux 는 SDK 파일 이름의 `macos-aarch64` 를 `linux-x86_64` 로 바꾼다.
+
+### 빌드
+
+저장소 루트에서:
+
+```sh
+ZEPHYR_WS=~/zephyr-nu scripts/build-zephyr.sh            # firmware/wallet/build/zephyr/zephyr.uf2
+ZEPHYR_WS=~/zephyr-nu scripts/build-zephyr.sh pristine   # 처음부터 다시
+```
+
+작업 공간의 Zephyr 커밋이 `west.yml` 의 고정값과 다르면 경고를 낸다.
+
+### Zephyr 펌웨어 올리기 — 먼저 읽을 것
+
+**올리면 Arduino 로 돌아가는 데 절차가 필요하다.** Zephyr 앱은 `0x1000` 부터
+올라가서 Arduino 가 쓰는 S140 SoftDevice 자리(`0x1000`~`0x26000`)를 덮어쓴다.
+부트로더는 이것을 막지 않는다 (Adafruit 부트로더의 `USER_FLASH_START` 가 `0x1000`).
+
+**지갑도 옮겨지지 않는다.** Arduino 는 지갑 레코드를 LittleFS 에, Zephyr 는 NVS
+(`0xDC000`~`0xE0000`)에 둔다. Zephyr 를 올린 뒤에는 복구 문구로 지갑을 다시 만든다.
+
+올리는 법:
+
+1. OS 블루투스 설정에서 기존 `NuWallet-…` 을 지운다 (아래 "설치 후 확인" 참고).
+2. RESET 을 빠르게 두 번 누른다. `BARAM-NU40` 드라이브가 뜬다.
+3. `firmware/wallet/build/zephyr/zephyr.uf2` 를 그 드라이브에 복사한다.
+
+Zephyr 앱은 USB 시리얼로 로그를 낸다. Arduino 와 달리 부팅 로그도 보인다.
+
+```sh
+screen /dev/cu.usbmodem* 115200
+```
+
+Arduino 로 돌아가려면 SoftDevice 와 부트로더를 함께 다시 올린 뒤 스케치를 올린다.
+패키지는 Arduino 코어 안에 있다. **이 절차는 아직 실기기에서 해 보지 않았다.**
+
+```sh
+# RESET 두 번으로 부트로더에 넣은 뒤
+CORE=$(ls -d "$(arduino-cli config get directories.data)"/packages/nucode/hardware/nrf52/* | sort -V | tail -1)
+adafruit-nrfutil --verbose dfu serial -b 115200 --singlebank -p /dev/cu.usbmodem1101 \
+  --package "$CORE/bootloader/NU40DK_nRF52840/NU40DK_nRF52840_bootloader-0.9.2_s140_6.1.1.zip"
+scripts/build-firmware.sh /dev/cu.usbmodem1101
+```
+
+### 업스트림 보드 정의와 실물이 다른 곳
+
+- **LED 극성.** 업스트림 DTS 는 `GPIO_ACTIVE_HIGH` 인데 이 보드의 LED 는 LOW 에서
+  켜진다. `firmware/wallet/boards/nucode_nu40_nrf52840.overlay` 가 뒤집는다.
+- **부트로더 위치.** 업스트림 DTS 주석은 UF2 부트로더가 `0xE0000` 에 있다고 적지만,
+  Arduino 코어가 싣고 오는 부트로더(`…bootloader-0.9.2_s140_6.1.1.hex`)는 `0xF4000`
+  에 있다. 업스트림 배치는 앱과 저장 영역을 `0xE0000` 아래에 두므로 둘 다에서
+  안전하다. 보드에 실제로 어느 부트로더가 있는지는 `BARAM-NU40` 드라이브의
+  `INFO_UF2.TXT` 로 확인한다.
 
 ## 설치 후 확인
 

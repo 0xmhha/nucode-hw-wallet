@@ -209,8 +209,19 @@ describe('실기기 (NU-40 DK)', { skip: skipReason }, () => {
       }
     });
 
-    test('Solana 주소가 나온다 (CryptoCell Ed25519)', async () => {
-      const acc = await wallet.getAccount('solana');
+    test('Solana 주소가 나온다 (CryptoCell Ed25519)', async (t) => {
+      let acc;
+      try {
+        acc = await wallet.getAccount('solana');
+      } catch (e) {
+        /* Zephyr 포트는 Ed25519 경로가 없어 UNSUPPORTED_CHAIN 으로 답한다.
+         * 그 펌웨어의 범위이지 결함이 아니다. 다른 오류는 그대로 실패시킨다. */
+        if (e?.status === SW.UNSUPPORTED_CHAIN) {
+          t.skip('이 펌웨어는 Solana 를 지원하지 않는다 (Zephyr 포트)');
+          return;
+        }
+        throw e;
+      }
       assert.ok(acc.address.length >= 32, `base58 주소가 아님: ${acc.address}`);
       assert.equal(acc.publicKey.length, 2 + 32 * 2);
     });

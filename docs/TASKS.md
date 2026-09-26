@@ -12,20 +12,17 @@
 
 ### 1. 다음 작업
 
-#### 🟠 T14. Zephyr 앱을 살린다 (다음 작업)
-2026-09-26 에 살리기로 정했다. 이 PR 다음 작업으로 한다.
+#### 🟠 T14. Zephyr 포트를 실기기에서 확인한다
+빌드까지는 끝났다 (2026-09-26, `feat/zephyr-port`). 보드 정의(`nucode_nu40`)는
+Zephyr `main` 에 이미 들어가 있어서 저장소 밖 트리를 가리킬 필요가 없었다.
+`firmware/wallet/west.yml` 이 검증한 커밋에 고정하고 `scripts/build-zephyr.sh` 로
+빌드한다. 빌드하면서 보드에서 틀렸을 것 다섯 가지를 고쳤다 (연결 해제를 BT
+스레드에서 처리하던 것, 연결 포인터 경합, 끊긴 뒤 재광고 안 함, LED 극성,
+공장 초기화용 HAL 누락).
 
-보드에 지금 올라가는 것은 Arduino 스케치이고, `firmware/wallet` 의 Zephyr 앱은
-보드 정의가 없어 빌드되지 않았다. 보드 정의는 이 저장소 밖에 있다. 로컬 Zephyr
-트리의 `boards/nucode/nucode_nu40/` 에 `nucode_nu40_nrf52840.dts`, 공통 `dtsi`,
-pinctrl, defconfig 가 있고, Adafruit 부트로더 없이 쓰는 `_bare` 변형도 있다.
-
-할 일은 이렇다. 먼저 그 보드 정의로 `firmware/wallet` 이 빌드되게 하고,
-보드 정의를 어떻게 가져올지 정한다 (업스트림 Zephyr 에 들어가 있는지, 아니면
-이 저장소에 `boards/` 로 두고 `BOARD_ROOT` 로 가리킬지). 그다음 실기기에서
-Arduino 와 같은 실기기 테스트(`npm run test:device:interactive`)를 통과시킨다.
-Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 이때 처음
-실기기에서 확인하게 된다.
+남은 일은 실기기다. `zephyr.uf2` 를 올리고 `npm run test:device:interactive` 를
+통과시킨다. Solana 항목은 이 포트에서 건너뛴다 (Ed25519 없음). 올리면 SoftDevice
+자리를 덮어쓰므로 설치 문서의 되돌리기 절차도 이때 처음 확인하게 된다.
 
 ### 2. 하지 않기로 했거나 고칠 수 없어 기록만 하는 것
 
