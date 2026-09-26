@@ -33,7 +33,7 @@
 |---|---|---|---|
 | **EIP-55** | 대소문자 체크섬 주소 | ✅ | `address.ts:69` |
 | BIP-32 / BIP-39 / BIP-44 | 계층 결정적 파생, 니모닉 | ✅ | `crypto/` — 공식 벡터로 검증 |
-| SLIP-44 | coin type 60 = Ethereum (`m/44'/60'/0'/0/0`) | ✅ | `protocol.ts` `DEFAULT_PATHS` |
+| SLIP-44 | coin type 60 = Ethereum (`m/44'/60'/0'/0/0`) | ✅ | `path.ts` `DEFAULT_PATHS` |
 | SLIP-0010 | ed25519 파생 (Solana) | ✅ | `crypto/slip10.c` 가 코어에 붙어 있다. 실기기에서 Ed25519 서명을 외부 라이브러리로 검증했다 |
 
 ## 3. DApp 연결 — 지갑이 "쓸 수 있는" 것이 되는 부분

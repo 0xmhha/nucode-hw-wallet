@@ -23,7 +23,7 @@
 | 3. 펌웨어 설정 웹 | `app/` (생성), `app/setup` (가져오기·PIN·잠금·초기화) | |
 | 4. 예제 DApp | `app/dapp` | |
 
-프로토콜은 `docs/protocol.md` 하나뿐이다. 펌웨어 `protocol.h`, SDK `protocol.ts`
+프로토콜은 `docs/protocol.md` 하나뿐이다. 펌웨어 `core/protocol.h`, SDK `constants.ts`
 가 그 문서에 1:1 대응한다. **셋 중 하나를 바꾸면 나머지 둘도 바꿔야 한다.**
 
 ---
@@ -68,14 +68,30 @@ cd firmware/test && make test     # 암호 스택 + 지갑 코어 (보드 불필
 ## 2. SDK — `sdk/`
 
 ```
-protocol.ts   상수 · 프레이밍 · 코덱          (문서 §1~§6 그대로)
+constants.ts  명령 · 상태 · 이벤트 · UUID · 플래그   (펌웨어 core/protocol.h 와 1:1)
+framing.ts    BLE 패킷 쪼개기와 재조립              (문서 §2)
+codec.ts      요청 · 응답 · 이벤트 메시지            (문서 §3)
+path.ts       BIP-32 경로와 CHAIN_PATH               (문서 §3.5)
+bytes.ts      hex · concat
+protocol.ts   위 다섯을 다시 모아 내보낸다 (옛 import 경로 호환)
+
 transport.ts  Web Bluetooth GATT, 요청/응답 짝짓기, 이벤트 배달
-client.ts     NuWallet — 셋업 · 주소 · 서명
-pin.ts        NuWalletAdmin — PIN · 잠금 · 패스프레이즈 (§8)
+client.ts     NuWallet — 셋업 · 주소 · 서명 · 승인 대기 (알림을 놓치면 GET_RESULT 로 되묻는다)
+signature.ts  기기 서명 바이트 해석과 v 계산 (legacy · EIP-155 · typed)
+base58.ts     Solana 주소 인코딩
+pin.ts        NuWalletAdmin — PIN · 잠금 (§8)
+
 provider.ts   NuWalletProvider — EIP-1193. window.ethereum 자리에 꽂는다
-rlp.ts        트랜잭션 인코딩
+fees.ts       수수료 추정. provider 와 DApp 잔액 확인이 같은 규칙을 쓴다
+errors.ts     기기 상태 코드를 EIP-1193 오류 코드로 바꾼다
+eip712.ts     구조체를 기기가 받는 해시 두 개로 줄인다
+rlp.ts        트랜잭션 인코딩 (legacy · EIP-1559)
+browser.ts    EIP-6963 발표
+solana.ts     web3.js 어댑터
+
 address.ts    Keccak-256 · EIP-55 체크섬
 wordlist.ts   BIP-39 영문 2048 단어 (기기는 인덱스만 주고받는다)
+networks.ts   테스트넷 설정
 ```
 
 ```sh

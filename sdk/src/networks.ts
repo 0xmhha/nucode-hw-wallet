@@ -8,7 +8,7 @@
  *   - Base Sepolia : ethereum-lists/chains (chainid.network/chains.json)
  *   - Solana       : 각 클러스터 RPC 에 getGenesisHash 를 직접 질의
  */
-import type { Chain } from './protocol.js';
+import type { Chain } from './path.js';
 
 export interface EvmNetwork {
   kind: 'evm';

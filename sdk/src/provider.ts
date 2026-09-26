@@ -7,7 +7,9 @@
  * 서명만 한다.
  */
 import { NuWallet } from './client.js';
-import { DEFAULT_PATH, WalletError, SW, fromHex, hex } from './protocol.js';
+import { fromHex, hex } from './bytes.js';
+import { WalletError, SW } from './constants.js';
+import { DEFAULT_PATH } from './path.js';
 import { toChecksumAddress } from './address.js';
 import type { ChallengeCallbacks, Eip1193Provider } from './types.js';
 import {
@@ -17,6 +19,8 @@ import {
 } from './rlp.js';
 import { hashTypedData, type TypedData } from './eip712.js';
 import { BASE_SEPOLIA } from './networks.js';
+import { ProviderRpcError, toProviderError } from './errors.js';
+import { fetchBaseFee, fetchPriorityFee, maxFeeFor, toBig } from './fees.js';
 
 export interface ProviderOptions extends ChallengeCallbacks {
   /** 서명 외 RPC 를 넘길 노드. 기본값은 Base Sepolia 공개 RPC. */
@@ -43,9 +47,6 @@ interface TxInput {
   type?: string | number;
   accessList?: { address: string; storageKeys: string[] }[];
 }
-
-/** 노드가 주는 블록 머리. 여기서 쓰는 것은 baseFeePerGas 하나다. */
-interface BlockHead { baseFeePerGas?: string | null }
 
 /** 채워 넣기가 끝난 트랜잭션. 어느 형식으로 낼지는 여기서 이미 정해져 있다. */
 type Filled =
@@ -270,33 +271,26 @@ export class NuWalletProvider implements Eip1193Provider {
 
   /** 최신 블록에 baseFeePerGas 가 있으면 런던 이후 체인이다. 한 번만 묻는다. */
   private async chainHasBaseFee(): Promise<boolean> {
-    if (this.baseFeeChain !== null) return this.baseFeeChain;
-    try {
-      const block = await this.rpc('eth_getBlockByNumber', ['latest', false]) as BlockHead | null;
-      this.baseFeeChain = block?.baseFeePerGas !== undefined && block?.baseFeePerGas !== null;
-    } catch {
-      this.baseFeeChain = false;      // 못 물어보면 legacy 로 간다. 어디서나 통한다.
-    }
+    if (this.baseFeeChain === null) this.baseFeeChain = (await fetchBaseFee(this.rpcCall)) !== null;
     return this.baseFeeChain;
   }
 
+  /** 호출자가 준 값은 그대로 쓰고, 빠진 것만 fees.ts 의 규칙으로 채운다. */
   private async fill1559Fees(t: TxInput): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
     if (t.maxFeePerGas !== undefined && t.maxPriorityFeePerGas !== undefined) {
       return { maxFeePerGas: toBig(t.maxFeePerGas), maxPriorityFeePerGas: toBig(t.maxPriorityFeePerGas) };
     }
-    let priority = t.maxPriorityFeePerGas !== undefined ? toBig(t.maxPriorityFeePerGas) : null;
-    if (priority === null) {
-      try { priority = toBig(await this.rpc('eth_maxPriorityFeePerGas', [])); }
-      catch { priority = 1_500_000_000n; }     // 노드가 안 받아 주면 1.5 gwei
-    }
+    const priority = t.maxPriorityFeePerGas !== undefined
+      ? toBig(t.maxPriorityFeePerGas)
+      : await fetchPriorityFee(this.rpcCall);
     if (t.maxFeePerGas !== undefined) {
       return { maxFeePerGas: toBig(t.maxFeePerGas), maxPriorityFeePerGas: priority };
     }
-    const block = await this.rpc('eth_getBlockByNumber', ['latest', false]) as BlockHead | null;
-    const base = toBig(block?.baseFeePerGas ?? '0x0');
-    // 다음 블록에서 base fee 가 12.5% 씩 최대 몇 블록 오르는 것을 견디게 두 배로 잡는다.
-    return { maxFeePerGas: base * 2n + priority, maxPriorityFeePerGas: priority };
+    const base = await fetchBaseFee(this.rpcCall) ?? 0n;
+    return { maxFeePerGas: maxFeeFor(base, priority), maxPriorityFeePerGas: priority };
   }
+
+  private readonly rpcCall = (method: string, params: unknown[]) => this.rpc(method, params);
 
   /** 채워진 트랜잭션을 기기로 보내 서명받고, 네트워크에 낼 바이트로 만든다. */
   private async signFilled(f: Filled): Promise<Uint8Array> {
@@ -327,52 +321,6 @@ export class NuWalletProvider implements Eip1193Provider {
   }
 }
 
-/** EIP-1193 §5 의 오류. `code` 로 DApp 이 분기한다. */
-export class ProviderRpcError extends Error {
-  constructor(readonly code: number, message: string, readonly data?: unknown) {
-    super(message);
-    this.name = 'ProviderRpcError';
-  }
-}
 
-/* 기기 상태 코드 → EIP-1193 / EIP-1474 오류 코드.
- *
- * 4001 사용자 거부 · 4100 권한 없음 · 4200 지원하지 않는 메서드
- * -32602 잘못된 파라미터 · -32603 내부 오류
- *
- * 승인 시간 초과와 버튼 시퀀스 실패도 4001 로 본다. DApp 입장에서는 셋 다
- * "사용자가 승인하지 않았다"이고, 재시도 UI 가 같기 때문이다. */
-const PROVIDER_CODE: Record<number, number> = {
-  [SW.USER_REJECTED]:       4001,
-  [SW.CHALLENGE_FAILED]:    4001,
-  [SW.CHALLENGE_TIMEOUT]:   4001,
-  [SW.LOCKED]:              4100,
-  [SW.PIN_REQUIRED]:        4100,
-  [SW.PIN_MISMATCH]:        4100,
-  [SW.NOT_INITIALIZED]:     4100,
-  [SW.ALREADY_INITIALIZED]: 4100,
-  [SW.UNKNOWN_CMD]:         4200,
-  [SW.UNSUPPORTED_CHAIN]:   4200,
-  [SW.BAD_PARAM]:          -32602,
-  [SW.TOO_LARGE]:          -32602,
-  [SW.DEVICE_ERROR]:       -32603,
-  [SW.FRAMING_ERROR]:      -32603,
-};
 
-function toProviderError(e: unknown): unknown {
-  if (e instanceof ProviderRpcError) return e;
-  if (e instanceof WalletError) {
-    const code = PROVIDER_CODE[e.status] ?? -32603;
-    return new ProviderRpcError(code, e.message, e);
-  }
-  return e;
-}
-
-function toBig(v: unknown): bigint {
-  if (typeof v === 'bigint') return v;
-  if (typeof v === 'number') return BigInt(v);
-  if (typeof v === 'string') return BigInt(v);
-  return 0n;
-}
-
-export { rlpEncode, toChecksumAddress };
+export { rlpEncode, toChecksumAddress, ProviderRpcError };

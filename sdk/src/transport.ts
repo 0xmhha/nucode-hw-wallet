@@ -4,11 +4,9 @@
  * 프레이밍은 protocol.ts 가 하고, 여기서는 GATT 연결과 요청/응답 짝짓기,
  * 이벤트 배달만 다룬다.
  */
-import {
-  SERVICE_UUID, RX_UUID, TX_UUID, TAG, SW,
-  frame, Reassembler, encodeRequest, decodeResponse, decodeEvent,
-  WalletError, type Response, type DeviceEvent,
-} from './protocol.js';
+import { encodeRequest, decodeResponse, decodeEvent, type Response, type DeviceEvent } from './codec.js';
+import { SERVICE_UUID, RX_UUID, TX_UUID, TAG, SW, WalletError } from './constants.js';
+import { frame, Reassembler } from './framing.js';
 
 export interface TransportOptions {
   /** ATT MTU 에서 헤더를 뺀 유효 페이로드. 보수적으로 20 이 안전하다. */

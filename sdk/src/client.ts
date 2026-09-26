@@ -4,17 +4,19 @@
  * 프로토콜 인코딩은 protocol.ts, BLE 는 transport.ts 가 맡는다.
  * 여기서는 명령을 의미 있는 API 로 감싸고, 서명 승인의 비동기 흐름을 다룬다.
  */
-import {
-  CMD, EVT, SW, WalletError, DEFAULT_PATHS,
-  encodeChainPath, concat, hex, fromHex, type Chain,
-} from './protocol.js';
+import { concat, hex, fromHex } from './bytes.js';
+import { CMD, EVT, SW, WalletError } from './constants.js';
+import { DEFAULT_PATHS, encodeChainPath, type Chain } from './path.js';
 import { BleTransport, type TransportOptions } from './transport.js';
 import { toChecksumAddress } from './address.js';
+import { base58 } from './base58.js';
+import { takeSig, makeSignature } from './signature.js';
 import type {
   DeviceInfo, DeviceState, AccountInfo, Signature, SignOptions,
 } from './types.js';
 
 const DEFAULT_SIGN_TIMEOUT = 70_000;   // 기기 챌린지 제한 60초 + 여유
+const DEFAULT_POLL_MS = 3_000;         // 결과 알림을 놓쳤는지 되묻는 간격
 
 export class NuWallet {
   readonly transport: BleTransport;
@@ -233,6 +235,7 @@ export class NuWallet {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        clearPoller();
         off();
         offDisc();
         opts.signal?.removeEventListener('abort', onAbort);
@@ -265,18 +268,40 @@ export class NuWallet {
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(p.subarray(6)));
         } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
-          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다. */
-          const status = edv.getUint16(5, false);
-          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
-          else finish(() => resolve(new Uint8Array()));
-        } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
-          // WIPE 처럼 서명이 아닌 승인 요청의 결과. 돌려줄 페이로드가 없다.
-          // 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6.
+          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다.
+           * 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6. */
           const status = edv.getUint16(5, false);
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(new Uint8Array()));
         }
       });
+
+      /* 알림을 놓쳤을 때의 복구 경로 (docs/protocol.md 0x40 GET_RESULT).
+       *
+       * 기기는 마지막 요청의 결과를 기억해 두고, 되물으면 알림과 같은 바이트를
+       * 돌려준다 — STATUS(2) 뒤에 서명 요청이면 SIG_LEN‖SIG, 아니면 없음.
+       * 아직 승인 중이면 STATUS 자리에 PENDING 이 온다. 알림이 먼저 오면
+       * finish() 가 한 번만 통과시키므로 둘이 겹쳐도 결과는 하나다. */
+      const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+      let polling = false;
+      const poll = async () => {
+        if (done || polling) return;
+        polling = true;
+        try {
+          const r = await this.transport.send(CMD.GET_RESULT, be32(requestId));
+          if (done || r.status !== SW.OK || r.payload.length < 2) return;
+          const status = (r.payload[0]! << 8) | r.payload[1]!;
+          if (status === SW.PENDING) return;
+          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
+          else finish(() => resolve(r.payload.subarray(2)));
+        } catch {
+          /* 되묻기 실패는 치명적이지 않다. 알림이나 다음 되묻기를 기다린다. */
+        } finally {
+          polling = false;
+        }
+      };
+      const poller = pollMs > 0 ? setInterval(() => { void poll(); }, pollMs) : undefined;
+      const clearPoller = () => { if (poller) clearInterval(poller); };
       const offDisc = this.transport.onDisconnect(() => {
         finish(() => reject(new WalletError(SW.DEVICE_ERROR, '기기 연결이 끊겼습니다')));
       });
@@ -306,75 +331,5 @@ function decodeWords(p: Uint8Array): number[] {
   const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
   const out: number[] = [];
   for (let i = 0; i < n; i++) out.push(dv.getUint16(1 + i * 2, false));
-  return out;
-}
-
-/** SIG_LEN ‖ SIGNATURE 에서 서명만 꺼낸다. */
-function takeSig(raw: Uint8Array, expectedLength: number): Uint8Array {
-  /* 초기 Arduino 펌웨어는 SIG_LEN 없이 서명만 보냈다. 전체 길이가 체인별
-   * 고정 길이와 정확히 같을 때만 레거시 응답으로 인정한다. */
-  if (raw.length === expectedLength) return raw;
-  if (raw.length < 1) throw new WalletError(SW.DEVICE_ERROR, '서명이 비어 있습니다');
-  const n = raw[0]!;
-  if (n !== expectedLength || raw.length !== 1 + n) {
-    throw new WalletError(SW.DEVICE_ERROR,
-      `서명 길이가 맞지 않습니다 (SIG_LEN=${n}, 실제 ${raw.length - 1})`);
-  }
-  return raw.subarray(1, 1 + n);
-}
-
-type VMode = 'legacy' | 'eip155' | 'typed';
-
-/**
- * 기기가 준 r ‖ s ‖ recid 를 Ethereum 서명으로 만든다.
- * v 계산 규칙은 docs/protocol.md §6 참고.
- */
-function makeSignature(raw: Uint8Array, mode: VMode, chainId?: number): Signature {
-  /* docs/protocol.md §6: SIG_LEN(1) ‖ SIGNATURE
-   *
-   * 길이 접두사를 "있으면 쓰고 없으면 만다" 식으로 추측하면 안 된다.
-   * r 의 첫 바이트가 우연히 64 인 서명이 256개 중 하나꼴로 나오는데, 그때
-   * 한 바이트를 잘라내고 엉뚱한 서명을 만들어 낸다. */
-  const body = takeSig(raw, 65);
-  if (body.length !== 65) {
-    throw new WalletError(SW.DEVICE_ERROR,
-      `Ethereum 서명은 65바이트여야 합니다 (받은 길이 ${body.length})`);
-  }
-  const r = body.subarray(0, 32);
-  const s = body.subarray(32, 64);
-  const recid = body[64]!;
-
-  let v: number;
-  if (mode === 'typed') v = recid;                       // yParity
-  else if (mode === 'eip155') {
-    if (chainId === undefined) {
-      throw new WalletError(SW.BAD_PARAM, 'EIP-155 서명에는 chainId 가 필요합니다');
-    }
-    v = recid + chainId * 2 + 35;
-  } else v = recid + 27;
-
-  return {
-    r: hex(r), s: hex(s), recid, v,
-    serialized: hex(concat(r, s, new Uint8Array([v & 0xff]))),
-  };
-}
-
-
-/** Solana 주소는 공개키의 base58 이다. 의존성 없이 짧게 구현한다. */
-function base58(b: Uint8Array): string {
-  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  const digits: number[] = [0];
-  for (const byte of b) {
-    let carry = byte;
-    for (let i = 0; i < digits.length; i++) {
-      carry += digits[i]! << 8;
-      digits[i] = carry % 58;
-      carry = (carry / 58) | 0;
-    }
-    while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
-  }
-  let out = '';
-  for (const byte of b) { if (byte === 0) out += A[0]; else break; }
-  for (let i = digits.length - 1; i >= 0; i--) out += A[digits[i]!];
   return out;
 }
