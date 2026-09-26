@@ -4,7 +4,8 @@
  * 기기는 SIG_LEN ‖ SIGNATURE 를 준다 (docs/protocol.md §6). Ethereum 은
  * r ‖ s ‖ recid 65바이트이고, v 는 서명 종류에 따라 호스트가 계산한다.
  */
-import { SW, WalletError, concat, hex } from './protocol.js';
+import { concat, hex } from './bytes.js';
+import { SW, WalletError } from './constants.js';
 import type { Signature } from './types.js';
 
 /** SIG_LEN ‖ SIGNATURE 에서 서명만 꺼낸다. */

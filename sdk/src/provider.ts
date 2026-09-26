@@ -7,7 +7,9 @@
  * 서명만 한다.
  */
 import { NuWallet } from './client.js';
-import { DEFAULT_PATH, WalletError, SW, fromHex, hex } from './protocol.js';
+import { fromHex, hex } from './bytes.js';
+import { WalletError, SW } from './constants.js';
+import { DEFAULT_PATH } from './path.js';
 import { toChecksumAddress } from './address.js';
 import type { ChallengeCallbacks, Eip1193Provider } from './types.js';
 import {

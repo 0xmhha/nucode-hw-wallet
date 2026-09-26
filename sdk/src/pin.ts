@@ -8,8 +8,7 @@
  * 그래서 이 파일의 API 는 PIN 값을 받지 않는다. 절차를 시작시키고, 기기가 보내는
  * 진행 이벤트를 콜백으로 전달할 뿐이다.
  */
-import { CMD, EVT, SW, FLAG, PIN, APPROVAL, WalletError,
-         type ApprovalKind } from './protocol.js';
+import { CMD, EVT, SW, FLAG, PIN, APPROVAL, WalletError, type ApprovalKind } from './constants.js';
 import type { NuWallet } from './client.js';
 import type { ChallengeCallbacks } from './types.js';
 

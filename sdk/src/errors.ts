@@ -5,7 +5,7 @@
  * 명령(4200)"에 서로 다르게 반응해야 한다. 상태 코드를 그대로 올리면 구분할
  * 방법이 없다.
  */
-import { SW, WalletError } from './protocol.js';
+import { SW, WalletError } from './constants.js';
 
 /** EIP-1193 §5 의 오류. `code` 로 DApp 이 분기한다. */
 export class ProviderRpcError extends Error {

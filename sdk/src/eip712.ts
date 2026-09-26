@@ -12,7 +12,7 @@
  *    보여주는 것이 유일한 방어선이다.
  */
 import { keccak256 } from './address.js';
-import { concat, fromHex } from './protocol.js';
+import { concat, fromHex } from './bytes.js';
 
 export interface TypedField { name: string; type: string }
 export type TypedTypes = Record<string, TypedField[]>;

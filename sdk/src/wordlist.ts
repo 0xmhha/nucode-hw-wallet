@@ -10,7 +10,7 @@
  * 이 파일은 firmware/nuwallet/src/crypto/bip39_wordlist.h 에서 뽑아냈다.
  * 손으로 고치지 말 것 — 펌웨어와 한 글자라도 어긋나면 복구가 깨진다.
  */
-import { SW, WalletError } from './protocol.js';
+import { SW, WalletError } from './constants.js';
 
 export const WORDLIST: readonly string[] = [
   'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract',

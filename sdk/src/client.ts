@@ -4,10 +4,9 @@
  * 프로토콜 인코딩은 protocol.ts, BLE 는 transport.ts 가 맡는다.
  * 여기서는 명령을 의미 있는 API 로 감싸고, 서명 승인의 비동기 흐름을 다룬다.
  */
-import {
-  CMD, EVT, SW, WalletError, DEFAULT_PATHS,
-  encodeChainPath, concat, hex, fromHex, type Chain,
-} from './protocol.js';
+import { concat, hex, fromHex } from './bytes.js';
+import { CMD, EVT, SW, WalletError } from './constants.js';
+import { DEFAULT_PATHS, encodeChainPath, type Chain } from './path.js';
 import { BleTransport, type TransportOptions } from './transport.js';
 import { toChecksumAddress } from './address.js';
 import { base58 } from './base58.js';
