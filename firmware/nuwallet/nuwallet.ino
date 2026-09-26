@@ -59,9 +59,6 @@ static void hal_send(uint8_t tag, const uint8_t *msg, size_t len, void *ctx) {
 
 // ============================================================================
 void setup() {
-  // 가장 먼저 한다. SoftDevice(Bluefruit)와 파일시스템이 올라온 뒤에는 UICR 에 쓸 수 없다.
-  nu_arduino_approtect();
-
   Serial.begin(CONSOLE_BAUD);
   make_name();
 

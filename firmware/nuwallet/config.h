@@ -28,20 +28,14 @@
  * 0 이면 건너뛰고 곧바로 지갑으로 들어간다. */
 #define LED_SELFTEST_MS 0
 
-/* SWD 디버그 포트 잠금 (APPROTECT). 릴리스 빌드에서만 1 로 둔다.
+/* SWD 디버그 포트 잠금(APPROTECT)은 지원하지 않는다. 켜지 않는다.
  *
- * 꺼져 있으면 SWD 케이블 하나로 플래시를 통째로 읽을 수 있고, 그러면 PIN 이 막아
- * 주지 못한다 (4⁶ = 4,096 가지라 PC 에서 몇 초면 다 시도한다. SECURITY.md §3-1).
- * 켜도 전압 글리칭은 막지 못한다 (SECURITY.md §1).
- *
- * 켜면 되돌리기 어렵다. SWD 로 다시 접근하려면 칩 전체 삭제(nrfjprog --recover)가
- * 필요하고, 그때 Adafruit 부트로더까지 지워져 SWD 로 다시 올려야 한다. 시리얼 DFU
- * (adafruit-nrfutil, UF2) 로 앱을 갱신하는 것은 계속 된다. 개발 중에는 0 으로 둔다.
- *
- * 빌드할 때 --build-property "compiler.cpp.extra_flags=-DNU_ENABLE_APPROTECT=1"
- * 로도 켤 수 있다. */
-#ifndef NU_ENABLE_APPROTECT
-#define NU_ENABLE_APPROTECT 0
+ * 켜면 디버거로 플래시를 읽고 쓰는 길이 막히고, 되살리려면 칩 전체를 지워
+ * 부트로더까지 SWD 로 다시 올려야 한다. 지금 가진 장비로는 디버깅이 어려워지므로
+ * 2026-09-26 에 켜지 않기로 정했다. 예전에 있던 NU_ENABLE_APPROTECT 스위치를
+ * 누군가 빌드 옵션으로 넘기면 조용히 무시하지 않고 빌드를 멈춘다. */
+#if defined(NU_ENABLE_APPROTECT)
+#error "APPROTECT 는 이 프로젝트에서 켜지 않는다 (config.h 주석 참고). NU_ENABLE_APPROTECT 를 빼고 빌드하라."
 #endif
 
 #define CONSOLE_BAUD    115200

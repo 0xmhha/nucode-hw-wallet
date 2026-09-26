@@ -16,11 +16,6 @@ int nu_arduino_hal_init(nu_hal *hal);
  * 재진입을 가정하지 않기 때문이다. */
 int nu_arduino_poll_button(uint32_t now_ms);
 
-/* config.h 의 NU_ENABLE_APPROTECT 가 1 이면 SWD 포트를 잠근다. 0 이면 아무것도 안 한다.
- * 아직 잠겨 있지 않으면 UICR 에 쓰고 리셋하므로 돌아오지 않는다.
- * SoftDevice 가 켜지면 NVMC 에 직접 쓸 수 없으므로 setup() 맨 앞에서 부른다. */
-void nu_arduino_approtect(void);
-
 #ifdef __cplusplus
 }
 #endif
