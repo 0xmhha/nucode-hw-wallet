@@ -8,61 +8,91 @@
 
 ## 남은 일
 
-### 🟠 T8. `GET_RESULT(0x40)` 가 죽은 명령이다
-펌웨어는 구현했고 (`core/commands.c:465`) 문서에도 있는데 SDK 는 상수만
-가지고 있다 (`sdk/src/protocol.ts:33`). 이벤트를 놓쳤을 때의 복구 경로인데,
-지금은 이벤트를 놓치면 그냥 타임아웃까지 기다린다.
+순서대로 한다. 앞 묶음이 끝나야 뒤 묶음의 결과를 믿을 수 있다.
 
-BLE notify 는 구독 직후나 연결이 불안할 때 실제로 빠진다. `awaitApproval` 의
-타임아웃 직전에 한 번 `GET_RESULT` 로 물어보면 살아날 요청이 있다.
+### 1. 먼저 끝낼 것: 실기기 확인
 
-### 🟠 T18. 전송 전 잔액 확인이 legacy 수수료로 계산된다
-`app/dapp/page.tsx` 의 `send` 가 `eth_gasPrice` 로 필요 금액을 어림한다.
-그런데 type 2 로 나갈 때 지갑이 잡는 상한은 `baseFee*2 + tip` 이라 더 크다.
+#### 🔴 T21. PIN 재입력 단계를 실기기에서 끝까지 돌려 보지 못했다
+`8e8dc4c` 에서 1차 입력과 재입력의 LED 표시를 나눴다 (1차는 네 개가 같이
+깜빡이고, 재입력은 1·3 과 2·4 가 번갈아 깜빡인다). 호스트 테스트 `test_leds`
+16건은 통과했지만, 사람이 보드를 보고 두 단계를 구분할 수 있는지는 아직
+확인하지 않았다. 직전 실행은 재입력 단계에서 47초간 입력이 없어 시간 초과로
+끝났다.
+
+`cd sdk && npm run test:device:interactive` 가 셋업, 주소 골든 벡터, Solana 주소,
+personal_sign 골든 벡터, RLP 아닌 서명 거부까지 한 번에 통과하면 닫는다.
+나머지 항목 대부분은 이미 실기기에서 확인했다 (`ETH 주소·서명 바이트 일치`,
+`Ed25519 검증`, `공장 초기화`, `연결 해제 시 잠금`).
+
+### 2. 기능과 버그
+
+#### 🟠 T8. `GET_RESULT(0x40)` 를 SDK 가 쓰지 않는다
+펌웨어는 구현했고 (`core/commands.c`) 문서에도 있는데 SDK 는 상수만 있다
+(`sdk/src/protocol.ts:33`). 결과 이벤트 notify 를 놓치면 복구하지 못하고
+타임아웃까지 기다린다. BLE notify 는 구독 직후나 연결이 불안할 때 실제로 빠진다.
+`awaitApproval` 이 타임아웃 직전에 `GET_RESULT` 로 한 번 물어보면 살릴 수 있다.
+
+#### 🟠 T18. DApp 의 전송 전 잔액 확인이 legacy 수수료로 계산한다
+`app/dapp/page.tsx` 의 `send` 가 `eth_gasPrice` 로 필요 금액을 어림한다. 그런데
+provider 가 type 2 로 낼 때 지갑이 잡는 상한은 `baseFee*2 + tip` 이라 더 크다.
 잔액이 아슬아슬하면 이 확인을 통과하고도 노드가 거부한다.
-→ 화면 쪽도 `maxFeePerGas` 를 쓰거나, 확인을 provider 안으로 옮긴다.
+같은 카드의 안내 문구도 낡았다. 서명 대상을 아직
+`RLP([nonce,gasPrice,gas,to,value,data,chainId,0,0])` 로 적고 있다.
+화면이 `maxFeePerGas` 로 계산하거나, 확인을 provider 안으로 옮기고 문구를 고친다.
 
-### 🟡 T10. `protocol.ts` 심볼 35개
-상수 + 프레이밍 + 코덱 + 경로 + hex 유틸이 한 파일(287줄)에 있다.
-→ `constants.ts` / `framing.ts` / `codec.ts` / `path.ts` / `hex.ts`.
-   `index.ts` 배럴이 있으니 밖에서 보는 이름은 안 바뀐다.
+### 3. 구조 정리 (동작은 바뀌지 않는다)
 
-### 🟡 T11. 웹 페이지가 한 파일에 전부
-`app/dapp/page.tsx` 445줄, `app/setup/page.tsx` 285줄. 상태·RPC 호출·폼·렌더가
-섞여 있다. → 훅(`useNuWallet`, `useApproval`)과 표현 컴포넌트로 나눈다.
+네 항목 모두 급하지 않다. `codegraph.mjs` 기준 계층 위반과 순환은 없다.
+파일이 커져서 읽기 어려워진 것뿐이다.
 
-### 🟡 T12. `client.ts` 380줄 · `provider.ts` 378줄
-`client.ts` 는 기기 정보 + 셋업 + 주소 + 서명 3종 + 승인 대기 + 서명/base58
-헬퍼를 함께 들고 있다. 최소한 `signature.ts`(v 계산·SIG_LEN)와 `base58.ts` 는
-뺀다. `provider.ts` 는 수수료 채우기가 늘어 커졌다 → `fees.ts` 로 뺄 수 있다.
+| | 파일 | 줄 수 | 나누는 방향 |
+|---|---|---|---|
+| T10 | `sdk/src/protocol.ts` | 287 | 상수, 프레이밍, 코덱, 경로, hex 유틸을 파일 다섯 개로 나눈다. `index.ts` 배럴이 있어 밖에서 보는 이름은 그대로다 |
+| T11 | `app/dapp/page.tsx`, `app/setup/page.tsx` | 445, 285 | 상태와 RPC 호출을 훅(`useNuWallet`, `useApproval`)으로 빼고 화면은 표현 컴포넌트로 나눈다 |
+| T12 | `sdk/src/client.ts`, `sdk/src/provider.ts` | 380, 378 | client 에서 서명 v 계산과 base58 을, provider 에서 수수료 채우기를 뺀다 |
+| T19 | `core/commands.c`, `core/challenge.c` | 473, 384 | 체인별 분기가 늘어 커졌다. 이더리움과 Solana 핸들러를 나눈다 |
 
-### 🟡 T19. `commands.c` 473줄 · `challenge.c` 384줄
-코어를 다섯으로 나눈 뒤 다시 자란 파일들이다. `commands.c` 는 체인별 분기가
-늘면서 커졌다 → 이더리움·Solana 핸들러를 나눌 수 있다.
-당장 급하지는 않다. 계층 위반은 없다 (`codegraph.mjs`).
+T18 을 고치면 `page.tsx` 를 어차피 건드리므로 T11 을 같이 하는 편이 낫다.
 
-### 🟢 T13. 빌드 산출물이 git 히스토리에 남아 있다
-지금 추적하는 것은 `firmware/nuwallet/build/NUWALLET.UF2` 하나뿐이고 나머지는
-`.gitignore` 가 막는다. 그러나 히스토리에는 예전 elf 3.83MB · map 2.14MB 가
-영구히 남아 있어 클론이 그만큼 무겁다. 지우려면 `git filter-repo` 로 다시 써야
-하고, 그러면 이미 클론한 사람들의 히스토리가 갈라진다.
+### 4. 결정이 필요한 것
 
-### 🟢 T14. NU-40 DK 용 Zephyr 보드 정의가 없다
-`nucode_nu40` 은 저장소에도 Zephyr 업스트림에도 없다. 그래서 `firmware/wallet`
-의 Zephyr 앱은 **지금 빌드되지 않는다.** 보드에 올라가는 것은 Arduino 스케치다
-(`firmware/nuwallet`). 필요한 값은 `docs/nu40-dk-firmware-installation.md` 에
-정리해 뒀다 (LED P0.13~16, 버튼 P0.11/12/24/25, S140 v6 뒤 파티션,
-`CONFIG_BUILD_OUTPUT_UF2`).
+#### 🟢 T13. 빌드 산출물을 git 에 둘지
+지금 추적하는 산출물은 `firmware/nuwallet/build/NUWALLET.UF2`(384KB) 하나다.
+설치 문서가 이 파일을 바로 쓰게 안내하므로 편하지만, 빌드할 때마다 바뀌어
+커밋마다 384KB 씩 히스토리가 불어난다. GitHub Releases 로 옮기면 이 문제는
+없어지고, 대신 문서의 설치 절차가 한 단계 늘어난다.
+히스토리에는 예전 elf 3.83MB 와 map 2.14MB 도 남아 있다. 지우려면
+`git filter-repo` 로 다시 써야 하고, 그러면 이미 클론한 사람의 히스토리가 갈라진다.
 
-### 🟢 T15. `APPROTECT` 가 꺼져 있다
-SWD 로 플래시를 통째로 덤프할 수 있다. 켜도 글리칭은 못 막지만 캐주얼한
-덤프는 막는다. `SECURITY.md` §7.
+#### 🟢 T14. Zephyr 앱을 살릴지
+NU-40 DK 용 Zephyr 보드 정의(`nucode_nu40`)가 저장소에도 업스트림에도 없어서
+`firmware/wallet` 은 빌드되지 않는다. 보드에 올라가는 것은 Arduino 스케치다.
+코어는 두 포트가 같이 컴파일하므로 Zephyr 쪽 로직이 따로 낡지는 않지만,
+Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 실기기에서
+확인한 적이 없다. 필요한 보드 값은 `docs/nu40-dk-firmware-installation.md` 에 있다.
 
-### 🔴 T20. 서명 내용을 사용자가 볼 수 없다 (구조적 한계)
-LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승인은 **사람이
-물리적으로 여기 있다**만 증명하고, 화면에 뜬 것과 서명되는 것이 같은지는
+### 5. 하드웨어 보안
+
+#### 🟢 T15. `APPROTECT` 가 꺼져 있다
+SWD 로 플래시를 통째로 덤프할 수 있다. 덤프를 얻으면 PIN 이 막아 주지 못한다.
+PIN 은 버튼 4개로 6자리라 4⁶ = 4,096 가지뿐이고, PBKDF2 4096회로는 PC 에서
+몇 초면 전부 시도한다 (`SECURITY.md` §3-1). 즉 지금은 APPROTECT 가 저장된 시드를
+지키는 사실상 유일한 장벽인데 그것이 꺼져 있다. 켜도 글리칭은 못 막지만
+케이블 하나로 뜨는 덤프는 막는다. 켜면 개발 중 SWD 디버깅이 막히므로
+릴리스 빌드에서만 켜는 방식이 맞다.
+
+### 6. 고칠 수 없어 기록만 하는 것
+
+#### 🔴 T20. 서명 내용을 사용자가 볼 수 없다
+LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승인은 사람이
+물리적으로 여기 있다는 것만 증명하고, 화면에 뜬 것과 서명되는 것이 같은지는
 증명하지 못한다. EIP-712 는 기기가 해시 두 개만 받으므로 특히 그렇다.
-고칠 수 있는 문제가 아니라 기록해 두는 항목이다. `SECURITY.md` §2.
+`SECURITY.md` §2.
+
+#### 니모닉이 BLE 로 평문으로 오간다
+`SETUP_CREATE` 는 기기가 만든 니모닉을 호스트로 보내고, `SETUP_RESTORE` 는
+호스트가 니모닉을 기기로 보낸다. 어느 쪽이든 PC 가 니모닉 전체를 본다.
+화면이 없어 기기 안에서 보여 줄 방법이 없기 때문이다. `SECURITY.md` §3.
 
 ---
 
