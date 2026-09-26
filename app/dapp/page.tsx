@@ -10,18 +10,19 @@
  * 흘려보낼 뿐이다.
  *
  * 화면 조각은 `components/`, 폼 값으로 트랜잭션을 만드는 일은 `tx.ts`,
- * 수수료는 `fees.ts` 에 있다. 이 파일은 상태를 들고 버튼과 SDK 호출을 잇는다.
+ * 수수료 규칙은 SDK 의 `suggestFees` 가 provider 와 같이 쓴다. 이 파일은 상태를 들고 버튼과 SDK 호출을 잇는다.
  */
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { NuWallet, NuWalletProvider, hashTypedData, hex } from '@/sdk/src/index';
+import {
+  NuWallet, NuWalletProvider, hashTypedData, hex, maxFeeCost, suggestFees,
+} from '@/sdk/src/index';
 import s from './dapp.module.css';
 import { WebAppFooter } from '../components/WebAppFooter';
 import { formatEther } from '../lib/ether';
 import { useApproval } from '../lib/approval';
 import { useTask } from '../lib/task';
 import { PRESETS } from './presets';
-import { maxFeeCost, suggestFees } from './fees';
 import { buildPermit, buildTxParams, withFees, type TxForm, type TxParams } from './tx';
 import { useDappProvider } from './useDappProvider';
 import { ChainCard } from './components/ChainCard';

@@ -21,40 +21,12 @@
 
 `cd sdk && npm run test:device:interactive` 가 셋업, 주소 골든 벡터, Solana 주소,
 personal_sign 골든 벡터, RLP 아닌 서명 거부까지 한 번에 통과하면 닫는다.
+같은 실행에서 SDK 가 승인을 기다리며 3초마다 보내는 `GET_RESULT`(T8)가 버튼
+입력과 겹쳐도 문제없는지도 본다. 호스트에서는 확인했지만 실제 BLE 에서는 아직이다.
 나머지 항목 대부분은 이미 실기기에서 확인했다 (`ETH 주소·서명 바이트 일치`,
 `Ed25519 검증`, `공장 초기화`, `연결 해제 시 잠금`).
 
-### 2. 기능과 버그
-
-#### 🟠 T8. `GET_RESULT(0x40)` 를 SDK 가 쓰지 않는다
-펌웨어는 구현했고 (`core/commands.c`) 문서에도 있는데 SDK 는 상수만 있다
-(`sdk/src/protocol.ts:33`). 결과 이벤트 notify 를 놓치면 복구하지 못하고
-타임아웃까지 기다린다. BLE notify 는 구독 직후나 연결이 불안할 때 실제로 빠진다.
-`awaitApproval` 이 타임아웃 직전에 `GET_RESULT` 로 한 번 물어보면 살릴 수 있다.
-
-#### 🟠 T18. DApp 의 전송 전 잔액 확인이 legacy 수수료로 계산한다
-`app/dapp/page.tsx` 의 `send` 가 `eth_gasPrice` 로 필요 금액을 어림한다. 그런데
-provider 가 type 2 로 낼 때 지갑이 잡는 상한은 `baseFee*2 + tip` 이라 더 크다.
-잔액이 아슬아슬하면 이 확인을 통과하고도 노드가 거부한다.
-같은 카드의 안내 문구도 낡았다. 서명 대상을 아직
-`RLP([nonce,gasPrice,gas,to,value,data,chainId,0,0])` 로 적고 있다.
-화면이 `maxFeePerGas` 로 계산하거나, 확인을 provider 안으로 옮기고 문구를 고친다.
-
-### 3. 구조 정리 (동작은 바뀌지 않는다)
-
-네 항목 모두 급하지 않다. `codegraph.mjs` 기준 계층 위반과 순환은 없다.
-파일이 커져서 읽기 어려워진 것뿐이다.
-
-| | 파일 | 줄 수 | 나누는 방향 |
-|---|---|---|---|
-| T10 | `sdk/src/protocol.ts` | 287 | 상수, 프레이밍, 코덱, 경로, hex 유틸을 파일 다섯 개로 나눈다. `index.ts` 배럴이 있어 밖에서 보는 이름은 그대로다 |
-| T11 | `app/dapp/page.tsx`, `app/setup/page.tsx` | 445, 285 | 상태와 RPC 호출을 훅(`useNuWallet`, `useApproval`)으로 빼고 화면은 표현 컴포넌트로 나눈다 |
-| T12 | `sdk/src/client.ts`, `sdk/src/provider.ts` | 380, 378 | client 에서 서명 v 계산과 base58 을, provider 에서 수수료 채우기를 뺀다 |
-| T19 | `core/commands.c`, `core/challenge.c` | 473, 384 | 체인별 분기가 늘어 커졌다. 이더리움과 Solana 핸들러를 나눈다 |
-
-T18 을 고치면 `page.tsx` 를 어차피 건드리므로 T11 을 같이 하는 편이 낫다.
-
-### 4. 결정이 필요한 것
+### 2. 결정이 필요한 것
 
 #### 🟢 T13. 빌드 산출물을 git 에 둘지
 지금 추적하는 산출물은 `firmware/nuwallet/build/NUWALLET.UF2`(384KB) 하나다.
@@ -71,17 +43,21 @@ NU-40 DK 용 Zephyr 보드 정의(`nucode_nu40`)가 저장소에도 업스트림
 Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 실기기에서
 확인한 적이 없다. 필요한 보드 값은 `docs/nu40-dk-firmware-installation.md` 에 있다.
 
-### 5. 하드웨어 보안
+### 3. 하드웨어 보안
 
-#### 🟢 T15. `APPROTECT` 가 꺼져 있다
-SWD 로 플래시를 통째로 덤프할 수 있다. 덤프를 얻으면 PIN 이 막아 주지 못한다.
-PIN 은 버튼 4개로 6자리라 4⁶ = 4,096 가지뿐이고, PBKDF2 4096회로는 PC 에서
-몇 초면 전부 시도한다 (`SECURITY.md` §3-1). 즉 지금은 APPROTECT 가 저장된 시드를
-지키는 사실상 유일한 장벽인데 그것이 꺼져 있다. 켜도 글리칭은 못 막지만
-케이블 하나로 뜨는 덤프는 막는다. 켜면 개발 중 SWD 디버깅이 막히므로
-릴리스 빌드에서만 켜는 방식이 맞다.
+#### 🟡 T15. `APPROTECT` 를 켠 빌드를 보드에서 확인하지 않았다
+`firmware/nuwallet/config.h` 의 `NU_ENABLE_APPROTECT` 로 켤 수 있게 했다. 기본은
+0 이다. 켜면 개발 중 SWD 디버깅이 막히므로 릴리스 빌드에서만 켠다.
 
-### 6. 고칠 수 없어 기록만 하는 것
+켠 빌드를 보드에 올려 보지는 않았다. 한 번 켜면 되돌리려면 칩 전체를 지워야
+해서, 확인 절차를 정하고 나서 한다. 지금까지 확인한 것은 역어셈블로 UICR
+`0x10001208` 에 쓰는 코드가 들어가는지뿐이다. 보드의 칩 리비전도 확인하지 않았다.
+리비전에 따라 APPROTECT 를 켜는 방식이 다르다.
+
+켜더라도 PIN 이 약하다는 사실(4⁶ = 4,096 가지, `SECURITY.md` §3-1)과 전압 글리칭으로
+우회된다는 사실은 그대로다.
+
+### 4. 고칠 수 없어 기록만 하는 것
 
 #### 🔴 T20. 서명 내용을 사용자가 볼 수 없다
 LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승인은 사람이
@@ -107,8 +83,13 @@ LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승�
 | T6 | 기기 상태 코드를 EIP-1193 오류 코드로 바꾼다 | `provider.test.js` — 사용자 거부가 4001 로 온다 |
 | T7 | 예제 DApp 이 EIP-6963 으로 자신을 알린다 | `app/dapp/page.tsx` 가 provider 가 바뀔 때마다 다시 알린다 |
 | T9 | `wallet.c` 837줄을 책임별로 나눴다 | 분리 전후로 테스트 수가 같고 골든 벡터가 안 바뀌었다 |
+| T8 | 결과 알림을 놓치면 SDK 가 `GET_RESULT` 로 되묻는다 | 적합성 브리지가 결과 알림을 버리게 하고도 골든 벡터 서명을 받는다. 기기 쪽 만료를 5초 타임아웃 대신 22ms 만에 알아낸다 |
+| T10 | `protocol.ts` 를 constants·framing·codec·path·bytes 로 나눴다 | `protocol.ts` 는 모아 내보내기만 한다. `check-protocol.py` 는 `constants.ts` 를 읽고 불일치 0건이다 |
+| T11 | 웹 페이지를 훅(`app/lib`), 화면 조각(`components/`), 순수 함수(`dapp/tx.ts`)로 나눴다 | tsc, eslint, `npm run build` 통과 |
+| T12 | client·provider 에서 `signature.ts`, `base58.ts`, `fees.ts`, `errors.ts` 를 떼어냈다 | 테스트 108개 통과, 계층 위반 0 |
+| T18 | DApp 이 수수료를 먼저 정해 트랜잭션에 넣고 같은 상한으로 잔액을 확인한다 | 규칙은 SDK 의 `suggestFees` 하나를 provider 와 DApp 이 같이 쓴다 |
+| T19 | `commands.c` 를 공통·셋업·Ethereum·Solana 네 파일로 나눴다 | 펌웨어 148 + 140, 적합성 23개 통과. Arduino 스케치 빌드 통과 |
 | T16 | 두 세션이 같은 파일을 고치던 문제 | 지금은 커밋이 한 갈래다 |
-| T17 | 미푸시 작업 | `origin/protocol-v2-unified-core` 와 같다 |
 | — | 실기기에서만 나던 시계 스큐 언더플로와 연결 해제 시 세션이 안 닫히던 버그 | 회귀 테스트 `test_session_idle` 과 `nu_wallet_disconnected` |
 | — | `codegraph.mjs` 의 계층 패턴이 펌웨어 재배치 뒤 낡아 있었다 | 위반 5건이 전부 오탐이었다. 지금은 위반 0 |
 | — | `npm test` 가 `provider.test.js` 와 `adapters.test.js` 를 안 돌리고 있었다 | 스크립트에 넣었다. 70개 → 101개 |
@@ -119,9 +100,9 @@ LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승�
 
 | | 개수 | 무엇 |
 |---|---|---|
-| `firmware/test/test_crypto` + `test_wallet` | 148 | BIP-39/32 · RFC 6979 · Keccak · EIP-155 공식 벡터 · 프레이밍 · RLP · 저장 · 서명 · PIN · 잠금 · 타임아웃 |
-| `sdk/test/conformance` | 21 | **실제 펌웨어 코어를 자식 프로세스로 띄워** SDK 와 주고받는다 |
-| `sdk/test/*` 나머지 | 80 | 프레이밍 · 워드리스트 · PIN · 재연결 · provider · EIP-712 · EIP-1559 |
+| `firmware/test/test_crypto` + `test_wallet` | 140 + 148 | BIP-39/32 · RFC 6979 · Keccak · EIP-155 공식 벡터 · 프레이밍 · RLP · 저장 · 서명 · PIN · 잠금 · 타임아웃 |
+| `sdk/test/conformance` | 23 | **실제 펌웨어 코어를 자식 프로세스로 띄워** SDK 와 주고받는다 |
+| `sdk/test/*` 나머지 | 85 | 프레이밍 · 워드리스트 · PIN · 재연결 · provider · EIP-712 · EIP-1559 · 수수료 |
 | `scripts/check-protocol.py` | — | 명령·상태·UUID 가 펌웨어/SDK/문서 세 곳에서 같은지 |
 | `scripts/codegraph.mjs` | — | 계층 위반 · 순환 |
 | `npm run build` | — | 웹 네 페이지가 빌드되는지 |

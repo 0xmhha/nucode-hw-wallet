@@ -2,7 +2,7 @@
  * 폼 값으로 트랜잭션과 EIP-712 Permit 을 만든다. 화면과 떼어 둔 순수 함수들이다.
  */
 import { parseEther } from '../lib/ether';
-import type { FeeSuggestion } from './fees';
+import type { FeeSuggestion } from '@/sdk/src/index';
 
 export type TxForm = { chainId: string; account: string; to: string; value: string; data: string };
 export type TxParams = Record<string, string>;
