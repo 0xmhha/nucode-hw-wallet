@@ -12,6 +12,7 @@ export {
   DEFAULT_PATH, HARDENED, parsePath, encodePath, hex, fromHex, concat,
   frame, Reassembler, encodeRequest, decodeResponse, decodeEvent,
   FLAG, PIN, TESTNET, DEFAULT_PATHS, CHAIN, encodeChainPath, type Chain,
+  APPROVAL, type ApprovalKind,
 } from './protocol.js';
 export { keccak256, toChecksumAddress } from './address.js';
 export {

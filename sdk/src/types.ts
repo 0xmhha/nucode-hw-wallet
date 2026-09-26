@@ -47,6 +47,11 @@ export interface Signature {
 export interface SignOptions extends ChallengeCallbacks {
   /** 승인 대기 타임아웃(ms). 기본 70초 — 기기 챌린지 제한이 60초다. */
   timeoutMs?: number;
+  /**
+   * 결과 알림을 놓쳤을 때를 대비해 `GET_RESULT` 로 되묻는 간격(ms). 기본 3초.
+   * BLE notify 는 구독 직후나 링크가 불안할 때 실제로 빠진다. 0 이면 되묻지 않는다.
+   */
+  pollMs?: number;
   signal?: AbortSignal;
 }
 

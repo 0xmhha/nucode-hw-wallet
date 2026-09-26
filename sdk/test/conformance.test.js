@@ -102,6 +102,9 @@ class BridgeTransport {
   /* 이벤트는 다음 턴에 배달한다. 호출자가 응답을 받은 뒤에야 리스너를 걸기
    * 때문이다 — 실제 BLE 도 notify 는 별도 이벤트 루프 턴에 온다. */
   #dispatchLater(events) {
+    // 결과 알림이 BLE 에서 빠지는 상황을 흉내 낸다. 실제로 구독 직후나
+    // 링크가 불안할 때 notify 가 사라진다.
+    if (this.dropResults) events = events.filter((e) => e.evt !== 0xa2 && e.evt !== 0xa4);
     if (!events.length) return;
     setTimeout(() => {
       for (const e of events) for (const h of [...this.handlers]) h(e);
@@ -323,6 +326,35 @@ for (const suite of SUITES) describe(suite.name, () => {
     await assert.rejects(
       () => wallet.signTransaction('ethereum', ETH_PATH, short, undefined, { timeoutMs: 5000 }),
       (e) => e instanceof WalletError && e.status === SW.BAD_PARAM);
+  });
+
+  test('0x40 GET_RESULT — 결과 알림을 놓쳐도 SDK 가 되물어 서명을 받는다', async () => {
+    // 알림을 버리면 예전 SDK 는 70초 타임아웃까지 기다렸다. 이제는 주기적으로
+    // GET_RESULT 를 보내 기기가 기억해 둔 결과를 가져온다.
+    bt.dropResults = true;
+    try {
+      const sig = await withApproval(bt, () => wallet.signMessage(
+        ETH_PATH, GOLDEN.personalMessage, { timeoutMs: 5000, pollMs: 20 }));
+      assert.equal(sig.serialized, GOLDEN.personalSig, '되물어 받은 서명이 알림으로 받은 것과 같아야 한다');
+    } finally {
+      bt.dropResults = false;
+    }
+  });
+
+  test('0x40 GET_RESULT — 알림을 놓친 실패도 되물어 알아낸다', async () => {
+    // 기기 쪽 60초 제한을 넘겨 챌린지를 만료시킨다. 결과 알림은 버려진다.
+    bt.dropResults = true;
+    try {
+      const started = Date.now();
+      const p = wallet.signMessage(ETH_PATH, 'x', { timeoutMs: 5000, pollMs: 20 });
+      await settle();
+      await bt.drive('t61000');
+      await assert.rejects(p, (e) => e instanceof WalletError && e.status === SW.CHALLENGE_TIMEOUT);
+      // SDK 자체 타임아웃도 같은 코드를 내므로, 그보다 훨씬 빨리 끝났는지로 구분한다.
+      assert.ok(Date.now() - started < 2000, `되묻지 않고 타임아웃까지 기다렸다 (${Date.now() - started}ms)`);
+    } finally {
+      bt.dropResults = false;
+    }
   });
 
   test('0x30 SIGN_TX — RLP 이 아니면 기기가 거부한다', async () => {

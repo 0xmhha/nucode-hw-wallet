@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 
 const DEFAULT_SIGN_TIMEOUT = 70_000;   // 기기 챌린지 제한 60초 + 여유
+const DEFAULT_POLL_MS = 3_000;         // 결과 알림을 놓쳤는지 되묻는 간격
 
 export class NuWallet {
   readonly transport: BleTransport;
@@ -233,6 +234,7 @@ export class NuWallet {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        clearPoller();
         off();
         offDisc();
         opts.signal?.removeEventListener('abort', onAbort);
@@ -265,18 +267,40 @@ export class NuWallet {
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(p.subarray(6)));
         } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
-          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다. */
-          const status = edv.getUint16(5, false);
-          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
-          else finish(() => resolve(new Uint8Array()));
-        } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
-          // WIPE 처럼 서명이 아닌 승인 요청의 결과. 돌려줄 페이로드가 없다.
-          // 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6.
+          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다.
+           * 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6. */
           const status = edv.getUint16(5, false);
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(new Uint8Array()));
         }
       });
+
+      /* 알림을 놓쳤을 때의 복구 경로 (docs/protocol.md 0x40 GET_RESULT).
+       *
+       * 기기는 마지막 요청의 결과를 기억해 두고, 되물으면 알림과 같은 바이트를
+       * 돌려준다 — STATUS(2) 뒤에 서명 요청이면 SIG_LEN‖SIG, 아니면 없음.
+       * 아직 승인 중이면 STATUS 자리에 PENDING 이 온다. 알림이 먼저 오면
+       * finish() 가 한 번만 통과시키므로 둘이 겹쳐도 결과는 하나다. */
+      const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+      let polling = false;
+      const poll = async () => {
+        if (done || polling) return;
+        polling = true;
+        try {
+          const r = await this.transport.send(CMD.GET_RESULT, be32(requestId));
+          if (done || r.status !== SW.OK || r.payload.length < 2) return;
+          const status = (r.payload[0]! << 8) | r.payload[1]!;
+          if (status === SW.PENDING) return;
+          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
+          else finish(() => resolve(r.payload.subarray(2)));
+        } catch {
+          /* 되묻기 실패는 치명적이지 않다. 알림이나 다음 되묻기를 기다린다. */
+        } finally {
+          polling = false;
+        }
+      };
+      const poller = pollMs > 0 ? setInterval(() => { void poll(); }, pollMs) : undefined;
+      const clearPoller = () => { if (poller) clearInterval(poller); };
       const offDisc = this.transport.onDisconnect(() => {
         finish(() => reject(new WalletError(SW.DEVICE_ERROR, '기기 연결이 끊겼습니다')));
       });
