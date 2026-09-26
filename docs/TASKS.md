@@ -36,12 +36,20 @@ personal_sign 골든 벡터, RLP 아닌 서명 거부까지 한 번에 통과하
 히스토리에는 예전 elf 3.83MB 와 map 2.14MB 도 남아 있다. 지우려면
 `git filter-repo` 로 다시 써야 하고, 그러면 이미 클론한 사람의 히스토리가 갈라진다.
 
-#### 🟢 T14. Zephyr 앱을 살릴지
-NU-40 DK 용 Zephyr 보드 정의(`nucode_nu40`)가 저장소에도 업스트림에도 없어서
-`firmware/wallet` 은 빌드되지 않는다. 보드에 올라가는 것은 Arduino 스케치다.
-코어는 두 포트가 같이 컴파일하므로 Zephyr 쪽 로직이 따로 낡지는 않지만,
-Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 실기기에서
-확인한 적이 없다. 필요한 보드 값은 `docs/nu40-dk-firmware-installation.md` 에 있다.
+#### 🟠 T14. Zephyr 앱을 살린다 (다음 작업)
+2026-09-26 에 살리기로 정했다. 이 PR 다음 작업으로 한다.
+
+보드에 지금 올라가는 것은 Arduino 스케치이고, `firmware/wallet` 의 Zephyr 앱은
+보드 정의가 없어 빌드되지 않았다. 보드 정의는 이 저장소 밖에 있다. 로컬 Zephyr
+트리의 `boards/nucode/nucode_nu40/` 에 `nucode_nu40_nrf52840.dts`, 공통 `dtsi`,
+pinctrl, defconfig 가 있고, Adafruit 부트로더 없이 쓰는 `_bare` 변형도 있다.
+
+할 일은 이렇다. 먼저 그 보드 정의로 `firmware/wallet` 이 빌드되게 하고,
+보드 정의를 어떻게 가져올지 정한다 (업스트림 Zephyr 에 들어가 있는지, 아니면
+이 저장소에 `boards/` 로 두고 `BOARD_ROOT` 로 가리킬지). 그다음 실기기에서
+Arduino 와 같은 실기기 테스트(`npm run test:device:interactive`)를 통과시킨다.
+Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 이때 처음
+실기기에서 확인하게 된다.
 
 ### 3. 하드웨어 보안
 
