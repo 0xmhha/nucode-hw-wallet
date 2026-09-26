@@ -1,0 +1,25 @@
+# Zephyr 포트를 빌드할 작업 공간의 매니페스트.
+#
+# NU-40 보드 정의(nucode_nu40)는 2026-05 에 Zephyr main 에 들어갔고 아직 어느
+# 릴리스에도 없다. 그래서 검증한 main 커밋 하나에 고정한다. 올릴 때는 이 값을
+# 바꾸고 scripts/build-zephyr.sh 로 다시 빌드해 본다.
+#
+# 모듈은 빌드에 실제로 필요한 것만 받는다. 전부 받으면 수 GB 다.
+# 쓰는 법은 docs/nu40-dk-firmware-installation.md 의 "Zephyr 로 빌드하기".
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: 3e7672a71bd954ca46c38c99d8d8f68a0fb23090
+      import:
+        name-allowlist:
+          - cmsis_6
+          - hal_nordic
+          - mbedtls
+          - tf-psa-crypto
+          - segger
+  self:
+    path: nucode-hw-wallet

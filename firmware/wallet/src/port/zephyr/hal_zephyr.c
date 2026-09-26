@@ -6,7 +6,12 @@
  *  난수 : sys_csrand_get() — nRF52840 의 RNG 주변장치를 쓴다
  *  저장 : settings 서브시스템 (NVS). 지갑 레코드 한 덩어리만 넣는다
  *  LED  : devicetree 의 led0..led3 별칭
- *  버튼 : sw0..sw3 별칭. 인터럽트 -> 디바운스 워크 -> 콜백                 */
+ *  버튼 : sw0..sw3 별칭. 인터럽트 -> 디바운스 워크 -> 콜백
+ *         누르고 있는 상태는 hal->buttons 로 따로 읽는다 (공장 초기화)
+ *
+ *  비어 있는 것: Ed25519. nRF52840 에서 Arduino 포트는 CryptoCell 로 하는데
+ *  Zephyr 에는 그 경로가 없다. hal->ed25519_* 를 NULL 로 두면 코어가 Solana
+ *  요청에 UNSUPPORTED_CHAIN 으로 답한다. 본딩 삭제는 BLE 쪽(ble.c)이 채운다. */
 #include "hal_zephyr.h"
 #include "core/protocol.h"
 
@@ -135,6 +140,20 @@ static void btn_isr(const struct device *port, struct gpio_callback *cb, uint32_
     }
 }
 
+/* 지금 누르고 있는 버튼의 비트마스크. 공장 초기화가 두 버튼을 5초 동안
+ * 붙잡고 있는지 매 틱 본다. 디바운스는 필요 없다 — 5초를 재는 동안의 채터링은
+ * 코어가 홀드를 다시 세게 할 뿐이다. */
+static uint8_t hal_buttons(void *ctx) {
+    ARG_UNUSED(ctx);
+    uint8_t mask = 0;
+    for (int i = 0; i < NU_BUTTON_COUNT; i++) {
+        if (device_is_ready(buttons[i].port) && gpio_pin_get_dt(&buttons[i]) > 0) {
+            mask |= (uint8_t)(1u << i);
+        }
+    }
+    return mask;
+}
+
 /* ── 초기화 ─────────────────────────────────────────────────────────────── */
 
 int nu_zephyr_hal_init(nu_hal *hal) {
@@ -163,6 +182,7 @@ int nu_zephyr_hal_init(nu_hal *hal) {
     hal->store_write = hal_store_write;
     hal->store_erase = hal_store_erase;
     hal->leds        = hal_leds;
+    hal->buttons     = hal_buttons;
     hal->millis      = hal_millis;
     hal->send        = NULL;          /* ble.c 가 채운다 */
     hal->ctx         = NULL;

@@ -10,7 +10,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
-#include <zephyr/drivers/hwinfo.h>
+#include <hal/nrf_ficr.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/logging/log.h>
 #include <errno.h>
@@ -22,7 +22,10 @@ static struct bt_uuid_128 uuid_svc = BT_UUID_INIT_128(NU_UUID128_SERVICE);
 static struct bt_uuid_128 uuid_rx  = BT_UUID_INIT_128(NU_UUID128_RX);
 static struct bt_uuid_128 uuid_tx  = BT_UUID_INIT_128(NU_UUID128_TX);
 
+/* current 는 BT 스레드(연결·해제 콜백)와 메인 스레드(송신)가 같이 본다.
+ * 잠금 안에서만 읽고 쓰며, 송신은 잠금 안에서 참조를 하나 더 잡고 한다. */
 static struct bt_conn *current;
+static struct k_spinlock conn_lock;
 static nu_wallet      *wallet;
 static nu_reasm        asm_in;
 static bool            notify_on;
@@ -40,6 +43,13 @@ static uint8_t   inbox[NU_MAX_MESSAGE];
 static uint16_t  inbox_len;
 static uint16_t  inbox_err;          /* 0 이 아니면 프레이밍 오류 */
 static atomic_t  inbox_full;         /* 1 이면 메인 스레드가 처리해야 한다 */
+static uint32_t  inbox_gen;          /* 인박스를 채운 연결의 세대 */
+static atomic_t  conn_gen;           /* 연결될 때와 끊길 때마다 1 씩 는다 */
+
+/* 연결 해제도 메인 스레드에서 처리한다. 해제 콜백은 BT 스레드에서 오는데,
+ * 거기서 코어를 부르면 메인 스레드가 PBKDF2 를 돌리는 도중에 같은 지갑 상태를
+ * 동시에 만지게 된다. 콜백은 이 표시만 세우고 메인 루프를 깨운다. */
+static atomic_t  disconnect_pending;
 K_SEM_DEFINE(rx_sem, 0, 1);
 
 /* ── 송신 ───────────────────────────────────────────────────────────────── */
@@ -48,11 +58,15 @@ static void send_packet(const uint8_t *pkt, size_t len, void *ctx);
 
 static void hal_send(uint8_t tag, const uint8_t *msg, size_t len, void *ctx) {
     ARG_UNUSED(ctx);
-    if (!current || !notify_on) return;
+    k_spinlock_key_t key = k_spin_lock(&conn_lock);
+    struct bt_conn *conn = (current && notify_on) ? bt_conn_ref(current) : NULL;
+    k_spin_unlock(&conn_lock, key);
+    if (!conn) return;
     /* ATT MTU 에서 notify 헤더 3바이트를 뺀 값이 한 패킷의 최대 크기다. */
-    size_t mtu = bt_gatt_get_mtu(current);
+    size_t mtu = bt_gatt_get_mtu(conn);
     mtu = (mtu > 3) ? mtu - 3 : 20;
-    nu_frame(tag, msg, len, mtu, send_packet, NULL);
+    nu_frame(tag, msg, len, mtu, send_packet, conn);
+    bt_conn_unref(conn);
 }
 
 /* ── 수신 ───────────────────────────────────────────────────────────────── */
@@ -79,6 +93,7 @@ static ssize_t on_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     if (!atomic_cas(&inbox_full, 0, 1)) {
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
     }
+    inbox_gen = (uint32_t)atomic_get(&conn_gen);
     if (r < 0) {
         inbox_err = (uint16_t)(-r);
         inbox_len = 0;
@@ -112,9 +127,9 @@ BT_GATT_SERVICE_DEFINE(nu_svc,
  * 그냥 버리면 호스트 쪽 조립에서 SEQ 가 어긋나 메시지 전체가 깨진다.
  * 이 함수는 이제 메인 스레드에서만 불리므로 잠깐 자면서 기다려도 안전하다. */
 static void send_packet(const uint8_t *pkt, size_t len, void *ctx) {
-    ARG_UNUSED(ctx);
+    struct bt_conn *conn = ctx;              /* hal_send 가 참조를 잡아 넘긴다 */
     for (int i = 0; i < 100; i++) {
-        const int err = bt_gatt_notify(current, &nu_svc.attrs[1], pkt, len);
+        const int err = bt_gatt_notify(conn, &nu_svc.attrs[1], pkt, len);
         if (err == 0) return;
         if (err != -ENOMEM) { LOG_WRN("notify 실패 (%d)", err); return; }
         k_sleep(K_MSEC(2));
@@ -122,10 +137,21 @@ static void send_packet(const uint8_t *pkt, size_t len, void *ctx) {
     LOG_ERR("notify TX 버퍼가 계속 모자랍니다 — 패킷을 버립니다");
 }
 
-/* 메인 루프가 부른다. 조립이 끝난 요청이 있으면 코어에 넘긴다.
- * 코어는 여기서, 즉 메인 스레드 스택에서 실행된다. */
+/* 메인 루프가 부른다. 연결 해제와 조립이 끝난 요청을 코어에 넘긴다.
+ * 코어는 여기서, 즉 메인 스레드 스택에서만 실행된다.
+ *
+ * 해제를 먼저 본다. 해제 전에 들어와 아직 처리하지 못한 요청은 버린다 — 응답을
+ * 받을 연결이 이미 없다. 세대는 해제할 때도 오르므로 그 요청은 세대가 다르다. */
 void nu_ble_rx_poll(int timeout_ms) {
     if (k_sem_take(&rx_sem, K_MSEC(timeout_ms)) != 0) return;
+
+    if (atomic_cas(&disconnect_pending, 1, 0)) {
+        nu_wallet_disconnected(wallet);   /* 진행 중 요청 폐기 + 재잠금 */
+        if (atomic_get(&inbox_full) && inbox_gen != (uint32_t)atomic_get(&conn_gen)) {
+            atomic_clear(&inbox_full);
+        }
+    }
+    if (!atomic_get(&inbox_full)) return;
     if (inbox_err) nu_wallet_framing_error(wallet, inbox_err);
     else           nu_wallet_handle(wallet, inbox, inbox_len);
     /* 응답을 다 내보낸 뒤에 슬롯을 연다. */
@@ -136,7 +162,10 @@ void nu_ble_rx_poll(int timeout_ms) {
 
 static void connected(struct bt_conn *conn, uint8_t err) {
     if (err) { LOG_WRN("연결 실패 (%u)", err); return; }
+    k_spinlock_key_t key = k_spin_lock(&conn_lock);
     current = bt_conn_ref(conn);
+    k_spin_unlock(&conn_lock, key);
+    atomic_inc(&conn_gen);
     nu_reasm_init(&asm_in);
     /* 페어링/암호화를 우리 쪽에서 먼저 요구한다. */
     if (bt_conn_set_security(conn, BT_SECURITY_L2)) {
@@ -145,19 +174,36 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
-    ARG_UNUSED(reason);
-    if (current) { bt_conn_unref(current); current = NULL; }
-    notify_on = false;
-    nu_reasm_init(&asm_in);
-    atomic_clear(&inbox_full);
-    k_sem_reset(&rx_sem);
-    nu_wallet_disconnected(wallet);   /* 진행 중 요청 폐기 + 재잠금 */
     ARG_UNUSED(conn);
+    LOG_INF("연결 해제 (0x%02x)", reason);
+    k_spinlock_key_t key = k_spin_lock(&conn_lock);
+    struct bt_conn *old = current;
+    current = NULL;
+    notify_on = false;
+    k_spin_unlock(&conn_lock, key);
+    if (old) bt_conn_unref(old);
+    nu_reasm_init(&asm_in);
+    /* 세대를 올려 두면, 끊기기 전에 들어와 아직 처리 못 한 요청은 버려진다.
+     * 응답받을 연결이 없는 요청이 잠금 해제나 서명 절차를 시작하면 안 된다. */
+    atomic_inc(&conn_gen);
+    atomic_set(&disconnect_pending, 1);
+    k_sem_give(&rx_sem);
+}
+
+/* 연결형 광고는 연결이 생기면 멈추고, 끊긴 뒤에도 저절로 다시 켜지지 않는다
+ * (Zephyr 4.x 의 BT_LE_ADV_OPT_CONN). 연결 객체가 풀로 돌아온 뒤에 다시 켠다.
+ * 이게 없으면 한 번 연결했다 끊은 보드는 재부팅 전까지 보이지 않는다. */
+static void adv_restart(struct k_work *work);
+static K_WORK_DEFINE(adv_work, adv_restart);
+
+static void recycled(void) {
+    k_work_submit(&adv_work);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
     .connected = connected,
     .disconnected = disconnected,
+    .recycled = recycled,
 };
 
 int nu_ble_connected(void) { return current != NULL; }
@@ -170,19 +216,30 @@ static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_UUID128_ALL, NU_UUID128_SERVICE),
 };
 
-/* 기기 고유 이름 — 재부팅해도 같아야 사용자가 알아본다. */
-static void make_name(char *out, size_t cap) {
-    uint8_t id[8] = {0};
-    const ssize_t n = hwinfo_get_device_id(id, sizeof id);
-    const unsigned a = (n >= 3) ? id[0] : 0;
-    const unsigned b = (n >= 3) ? id[1] : 0;
-    const unsigned c = (n >= 3) ? id[2] : 0;
-    snprintk(out, cap, "NuWallet-%02X%02X%02X", a, b, c);
+static int adv_start(void) {
+    const struct bt_data sd[] = {
+        BT_DATA(BT_DATA_NAME_COMPLETE, dev_name, (uint8_t)strlen(dev_name)),
+    };
+    return bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+}
+
+static void adv_restart(struct k_work *work) {
+    ARG_UNUSED(work);
+    const int err = adv_start();
+    if (err && err != -EALREADY) LOG_ERR("광고 재시작 실패 (%d)", err);
+}
+
+/* 공장 초기화가 부른다. 호스트 쪽 페어링이 남아 있으면 다음 연결이 알림 구독에서
+ * 끊기므로, 보드 쪽 본딩 키를 전부 지운다. 연결 중이면 그 연결도 끊긴다. */
+static int bonds_erase(void *ctx) {
+    ARG_UNUSED(ctx);
+    return bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY) == 0;
 }
 
 int nu_ble_start(nu_wallet *w, nu_hal *hal, char *name_out, size_t name_cap) {
     wallet = w;
     hal->send = hal_send;
+    hal->bonds_erase = bonds_erase;
     nu_reasm_init(&asm_in);
 
     int err = bt_enable(NULL);
@@ -191,20 +248,15 @@ int nu_ble_start(nu_wallet *w, nu_hal *hal, char *name_out, size_t name_cap) {
     /* 본딩 정보를 유지하려면 설정을 불러와야 한다. */
     if (IS_ENABLED(CONFIG_BT_SETTINGS)) settings_load();
 
-    make_name(dev_name, sizeof dev_name);
+    /* 이름 규칙은 코어에 있다. Arduino 포트와 같은 칩 번호를 넣으므로
+     * 같은 보드는 어느 펌웨어를 올려도 같은 이름으로 보인다. */
+    nu_device_name(nrf_ficr_deviceid_get(NRF_FICR, 0), nrf_ficr_deviceid_get(NRF_FICR, 1),
+                   "NuWallet-", dev_name, sizeof dev_name);
     err = bt_set_name(dev_name);
     if (err) LOG_WRN("이름 설정 실패 (%d)", err);
     if (name_out) strncpy(name_out, dev_name, name_cap - 1);
 
-    const struct bt_data sd[] = {
-        BT_DATA(BT_DATA_NAME_COMPLETE, dev_name, (uint8_t)strlen(dev_name)),
-    };
-#ifdef BT_LE_ADV_CONN_FAST_1
-    const struct bt_le_adv_param *adv = BT_LE_ADV_CONN_FAST_1;   /* Zephyr 3.6+ */
-#else
-    const struct bt_le_adv_param *adv = BT_LE_ADV_CONN;
-#endif
-    err = bt_le_adv_start(adv, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    err = adv_start();
     if (err) { LOG_ERR("광고 시작 실패 (%d)", err); return err; }
 
     LOG_INF("%s 광고 시작", dev_name);
