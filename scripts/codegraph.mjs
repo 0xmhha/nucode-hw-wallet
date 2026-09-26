@@ -41,7 +41,7 @@ const LAYERS = [
   { id: 'fw.test',    match: /^firmware\/test\//,                        may: ['*'] },
   { id: 'fw.demo',    match: /^firmware\/(src|arduino)\//,               may: ['*'] },
 
-  { id: 'sdk.codec',  match: /^sdk\/src\/(protocol|rlp|address|eip712|wordlist|networks|types|web-bluetooth)\./, may: ['sdk.codec'] },
+  { id: 'sdk.codec',  match: /^sdk\/src\/(protocol|rlp|address|eip712|fees|signature|base58|errors|wordlist|networks|types|web-bluetooth)\./, may: ['sdk.codec'] },
   { id: 'sdk.link',   match: /^sdk\/src\/(transport|browser)\./,         may: ['sdk.codec', 'sdk.link'] },
   { id: 'sdk.client', match: /^sdk\/src\/(client|pin|solana)\./,         may: ['sdk.codec', 'sdk.link', 'sdk.client'] },
   { id: 'sdk.dapp',   match: /^sdk\/src\/provider\./,                    may: ['sdk.codec', 'sdk.link', 'sdk.client', 'sdk.dapp'] },

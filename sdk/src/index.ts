@@ -1,5 +1,6 @@
 export { NuWallet } from './client.js';
 export { NuWalletProvider, type ProviderOptions } from './provider.js';
+export { ProviderRpcError } from './errors.js';
 export { announceNuWalletProvider, type Eip6963ProviderInfo } from './browser.js';
 export {
   NuWalletSolanaAdapter,
@@ -29,6 +30,11 @@ export {
   encode1559Unsigned, encode1559Signed, encodeAccessList,
   type Eip1559Tx, type AccessListItem,
 } from './rlp.js';
+export {
+  suggestFees, maxFeeCost, fetchBaseFee, fetchPriorityFee, maxFeeFor, DEFAULT_PRIORITY_FEE,
+  type RpcCall, type FeeSuggestion,
+} from './fees.js';
+export { base58 } from './base58.js';
 export {
   encodeType, typeHash, hashStruct, domainSeparator, hashTypedData,
   type TypedData, type TypedTypes, type TypedField, type TypedDataHashes,
