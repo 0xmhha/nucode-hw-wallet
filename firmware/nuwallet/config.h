@@ -28,6 +28,22 @@
  * 0 이면 건너뛰고 곧바로 지갑으로 들어간다. */
 #define LED_SELFTEST_MS 0
 
+/* SWD 디버그 포트 잠금 (APPROTECT). 릴리스 빌드에서만 1 로 둔다.
+ *
+ * 꺼져 있으면 SWD 케이블 하나로 플래시를 통째로 읽을 수 있고, 그러면 PIN 이 막아
+ * 주지 못한다 (4⁶ = 4,096 가지라 PC 에서 몇 초면 다 시도한다. SECURITY.md §3-1).
+ * 켜도 전압 글리칭은 막지 못한다 (SECURITY.md §1).
+ *
+ * 켜면 되돌리기 어렵다. SWD 로 다시 접근하려면 칩 전체 삭제(nrfjprog --recover)가
+ * 필요하고, 그때 Adafruit 부트로더까지 지워져 SWD 로 다시 올려야 한다. 시리얼 DFU
+ * (adafruit-nrfutil, UF2) 로 앱을 갱신하는 것은 계속 된다. 개발 중에는 0 으로 둔다.
+ *
+ * 빌드할 때 --build-property "compiler.cpp.extra_flags=-DNU_ENABLE_APPROTECT=1"
+ * 로도 켤 수 있다. */
+#ifndef NU_ENABLE_APPROTECT
+#define NU_ENABLE_APPROTECT 0
+#endif
+
 #define CONSOLE_BAUD    115200
 /* 1 이면 시리얼로 상태 로그를 찍는다. 니모닉이나 키는 절대 찍지 않는다. */
 #define DEBUG_LOG       1

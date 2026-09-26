@@ -179,3 +179,27 @@ int nu_arduino_hal_init(nu_hal *hal) {
 }
 
 #endif /* ARDUINO */
+
+/* ── 디버그 포트 잠금 ──────────────────────────────────────────────────────
+ * UICR.APPROTECT 의 PALL 비트를 Enabled(0) 로 쓴다. 플래시 비트는 1 -> 0 으로만
+ * 바뀌므로 다른 비트를 건드리지 않게 PALL 만 내린 값을 쓴다. UICR 은 리셋 뒤에
+ * 적용되므로 쓰고 나서 곧바로 리셋한다. 다음 부팅에는 이미 잠겨 있어 그냥 돌아온다.
+ *
+ * 이 코어의 MDK 는 nRF52840 리비전 3 이전 기준이다. 리비전 3 이후 칩은 리셋마다
+ * 하드웨어가 포트를 잠그고 펌웨어가 풀어 주는 방식이라, 이 MDK 로 빌드한 펌웨어는
+ * 풀어 주는 코드가 없다. 그런 칩이라면 이 설정과 상관없이 이미 잠겨 있을 수 있다.
+ * 보드의 칩 리비전은 확인하지 않았다. */
+void nu_arduino_approtect(void) {
+#if NU_ENABLE_APPROTECT
+  const uint32_t enabled = UICR_APPROTECT_PALL_Enabled << UICR_APPROTECT_PALL_Pos;
+  if ((NRF_UICR->APPROTECT & UICR_APPROTECT_PALL_Msk) == enabled) return;
+
+  NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos;
+  while (NRF_NVMC->READY == NVMC_READY_READY_Busy) {}
+  NRF_UICR->APPROTECT = (NRF_UICR->APPROTECT & ~UICR_APPROTECT_PALL_Msk) | enabled;
+  while (NRF_NVMC->READY == NVMC_READY_READY_Busy) {}
+  NRF_NVMC->CONFIG = NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos;
+  while (NRF_NVMC->READY == NVMC_READY_READY_Busy) {}
+  NVIC_SystemReset();
+#endif
+}
