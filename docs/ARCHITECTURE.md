@@ -18,12 +18,12 @@
 
 | 요구 | 위치 | 상태 |
 |---|---|---|
-| 1. nucode 지원 펌웨어 | `firmware/zephyr` (Zephyr) | 아래 참고 |
+| 1. nucode 지원 펌웨어 | `firmware/wallet` (Zephyr) | 아래 참고 |
 | 2. Bluetooth SDK | `sdk/` | `@nucode/hw-wallet` |
 | 3. 펌웨어 설정 웹 | `app/` (생성), `app/setup` (가져오기·PIN·잠금·초기화) | |
 | 4. 예제 DApp | `app/dapp` | |
 
-프로토콜은 `docs/protocol.md` 하나뿐이다. 펌웨어 `protocol.h`, SDK `protocol.ts`
+프로토콜은 `docs/protocol.md` 하나뿐이다. 펌웨어 `core/protocol.h`, SDK `constants.ts`
 가 그 문서에 1:1 대응한다. **셋 중 하나를 바꾸면 나머지 둘도 바꿔야 한다.**
 
 ---
@@ -38,14 +38,20 @@
 
 ```
 firmware/
-  nuwallet/src/      공유 라이브러리 (보드용 코드 없음)
+  nuwallet/          Arduino 스케치. 보드에 올라가는 것은 이것이다
+    nuwallet.ino       HAL 연결, 버튼 폴링, 틱
+    src/core/          플랫폼 독립 지갑 코어. Arduino 와 Zephyr 가 같은 파일을 컴파일한다
+                       wire(송신) · session(시드) · challenge(승인) · wallet(생명주기)
+                       commands(파싱·디스패치) 와 명령 영역별 파일 셋:
+                       cmd_setup(셋업·PIN·잠금 해제) · cmd_ethereum · cmd_solana
     src/crypto/        SHA-2 · HMAC · PBKDF2 · Keccak-256 · BIP-39 · BIP-32
     src/micro-ecc/     secp256k1. recovery id 를 꺼내려고 패치했다
     src/chains/        체인별 해시 헬퍼
-  zephyr/            Zephyr 앱  →  firmware/zephyr/README.md
-    src/app/           플랫폼 독립 코어 (프레이밍 · RLP 검증 · 저장 · 상태 기계)
+    src/port/arduino/  HAL (LED · 버튼 · LittleFS · TRNG · CryptoCell Ed25519)
+    src/transport/     Bluefruit BLE GATT
+  wallet/            Zephyr 포트. 보드 정의가 없어 지금은 빌드되지 않는다 (TASKS T14)
     src/port/zephyr/   BLE GATT · GPIO · NVS · CSPRNG
-    src/port/host/     테스트용
+    src/port/host/     호스트 테스트용 HAL
   test/              호스트에서 도는 테스트. 보드도 SDK 도 필요 없다
 ```
 
@@ -67,14 +73,30 @@ cd firmware/test && make test     # 암호 스택 + 지갑 코어 (보드 불필
 ## 2. SDK — `sdk/`
 
 ```
-protocol.ts   상수 · 프레이밍 · 코덱          (문서 §1~§6 그대로)
+constants.ts  명령 · 상태 · 이벤트 · UUID · 플래그   (펌웨어 core/protocol.h 와 1:1)
+framing.ts    BLE 패킷 쪼개기와 재조립              (문서 §2)
+codec.ts      요청 · 응답 · 이벤트 메시지            (문서 §3)
+path.ts       BIP-32 경로와 CHAIN_PATH               (문서 §3.5)
+bytes.ts      hex · concat
+protocol.ts   위 다섯을 다시 모아 내보낸다 (옛 import 경로 호환)
+
 transport.ts  Web Bluetooth GATT, 요청/응답 짝짓기, 이벤트 배달
-client.ts     NuWallet — 셋업 · 주소 · 서명
-pin.ts        NuWalletAdmin — PIN · 잠금 · 패스프레이즈 (§8)
+client.ts     NuWallet — 셋업 · 주소 · 서명 · 승인 대기 (알림을 놓치면 GET_RESULT 로 되묻는다)
+signature.ts  기기 서명 바이트 해석과 v 계산 (legacy · EIP-155 · typed)
+base58.ts     Solana 주소 인코딩
+pin.ts        NuWalletAdmin — PIN · 잠금 (§8)
+
 provider.ts   NuWalletProvider — EIP-1193. window.ethereum 자리에 꽂는다
-rlp.ts        트랜잭션 인코딩
+fees.ts       수수료 추정. provider 와 DApp 잔액 확인이 같은 규칙을 쓴다
+errors.ts     기기 상태 코드를 EIP-1193 오류 코드로 바꾼다
+eip712.ts     구조체를 기기가 받는 해시 두 개로 줄인다
+rlp.ts        트랜잭션 인코딩 (legacy · EIP-1559)
+browser.ts    EIP-6963 발표
+solana.ts     web3.js 어댑터
+
 address.ts    Keccak-256 · EIP-55 체크섬
 wordlist.ts   BIP-39 영문 2048 단어 (기기는 인덱스만 주고받는다)
+networks.ts   테스트넷 설정
 ```
 
 ```sh
@@ -86,17 +108,27 @@ cd sdk && npm run build && npm test
 ## 3. 설정 웹 — `app/`, `app/setup`
 
 - `/` — 보드 연결, 새 지갑 생성(니모닉 표시 → 백업 확인 → 확정), 주소 파생
-- `/setup` — 기존 니모닉 가져오기, **버튼 4개 조합으로 PIN 설정**,
-  BIP-39 패스프레이즈로 잠금 해제, 초기화(WIPE)
+- `/setup` — 기존 니모닉 가져오기, PIN 변경, BIP-39 패스프레이즈로 잠금 해제,
+  초기화(WIPE)
 
-PIN 패드는 보드의 버튼 1~4 를 그대로 옮겨 놓은 것이다. 웹에서 PIN 을 보내는 것
-만으로는 바뀌지 않는다 — 보드에서 임의 챌린지를 한 번 통과해야 저장된다.
+PIN 은 웹에서 입력하지 않는다. 화면의 패드는 보드의 버튼 1~4 배치를 보여 줄 뿐이고,
+사용자는 보드의 버튼으로 6자리를 누른다. 웹이 PIN 을 알면 "호스트가 감염돼도 기기를
+못 연다" 는 목적이 무너지기 때문이다. 무엇을 누르라고 안내할지는 보드가 승인 시작
+이벤트의 KIND 로 알려 준다 (`app/lib/approval.ts`).
+
+두 페이지가 같이 쓰는 코드는 `app/lib/` 에 있다. 승인 진행 표시(`useApproval`),
+작업 실행과 오류 문구(`useTask`), wei 변환이다. 각 페이지의 화면 카드는
+`components/` 에 있고, `page.tsx` 는 상태를 들고 버튼과 SDK 호출을 잇기만 한다.
 
 ## 4. 예제 DApp — `app/dapp`
 
 `NuWalletProvider` 하나만 쓴다. 체인 설정(RPC · chainId · 파생 경로), 지갑 연결,
-잔액·nonce 조회, 트랜잭션 서명/전송, `personal_sign`, 그리고 오간 호출을 그대로
-보여주는 로그 패널.
+잔액·nonce 조회, 트랜잭션 서명/전송, `personal_sign`, EIP-712 Permit 서명, 그리고
+오간 호출을 그대로 보여주는 로그 패널이 있다. EIP-6963 으로 자신을 알린다.
+
+전송할 때는 수수료를 먼저 정해 트랜잭션에 넣고(SDK 의 `suggestFees`), 같은 숫자의 상한으로
+잔액을 확인한다. provider 는 호출자가 준 수수료를 그대로 쓰므로 확인한 값과 서명되는
+값이 같다. 폼 값으로 트랜잭션과 Permit 을 만드는 순수 함수는 `dapp/tx.ts` 에 있다.
 
 ```sh
 npm run dev     # http://localhost:3000/dapp

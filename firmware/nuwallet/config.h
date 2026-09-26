@@ -14,12 +14,29 @@
 #define LED_4   PIN_LED4      /* P0.16 */
 
 /* 핀맵 PNG 는 "negative logic", variant.h 는 LED_STATE_ON=1 이라 서로 다르다.
- * 실물에서 LED 가 반대로 켜지면 이 값을 1 로 바꾼다. */
-#define LED_INVERT      0
+ * NU-40 DK 실물은 LOW 에서 켜진다 — 실기기 확인 결과 1 이 맞다.
+ * HAL 이 이 값을 읽는다 (src/port/arduino/hal_arduino.cpp). */
+#define NU_LED_INVERT   1
 
 #define BTN_DEBOUNCE_MS 25
 
 #define BLE_NAME_PREFIX "NuWallet-"
+
+/* 부팅 직후 몇 초 동안 LED 를 하나씩 순서대로 켠다 — 극성과 핀 매핑 확인용.
+ * "LED 가 이상하다" 를 말로 주고받으면 극성인지 매핑인지 다른 코드가 끼어든
+ * 것인지 구분이 안 된다. 이 값을 16000 쯤으로 두고 한 번 보면 바로 갈린다.
+ * 0 이면 건너뛰고 곧바로 지갑으로 들어간다. */
+#define LED_SELFTEST_MS 0
+
+/* SWD 디버그 포트 잠금(APPROTECT)은 지원하지 않는다. 켜지 않는다.
+ *
+ * 켜면 디버거로 플래시를 읽고 쓰는 길이 막히고, 되살리려면 칩 전체를 지워
+ * 부트로더까지 SWD 로 다시 올려야 한다. 지금 가진 장비로는 디버깅이 어려워지므로
+ * 2026-09-26 에 켜지 않기로 정했다. 예전에 있던 NU_ENABLE_APPROTECT 스위치를
+ * 누군가 빌드 옵션으로 넘기면 조용히 무시하지 않고 빌드를 멈춘다. */
+#if defined(NU_ENABLE_APPROTECT)
+#error "APPROTECT 는 이 프로젝트에서 켜지 않는다 (config.h 주석 참고). NU_ENABLE_APPROTECT 를 빼고 빌드하라."
+#endif
 
 #define CONSOLE_BAUD    115200
 /* 1 이면 시리얼로 상태 로그를 찍는다. 니모닉이나 키는 절대 찍지 않는다. */

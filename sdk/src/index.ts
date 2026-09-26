@@ -1,5 +1,6 @@
 export { NuWallet } from './client.js';
 export { NuWalletProvider, type ProviderOptions } from './provider.js';
+export { ProviderRpcError } from './errors.js';
 export { announceNuWalletProvider, type Eip6963ProviderInfo } from './browser.js';
 export {
   NuWalletSolanaAdapter,
@@ -12,6 +13,7 @@ export {
   DEFAULT_PATH, HARDENED, parsePath, encodePath, hex, fromHex, concat,
   frame, Reassembler, encodeRequest, decodeResponse, decodeEvent,
   FLAG, PIN, TESTNET, DEFAULT_PATHS, CHAIN, encodeChainPath, type Chain,
+  APPROVAL, type ApprovalKind,
 } from './protocol.js';
 export { keccak256, toChecksumAddress } from './address.js';
 export {
@@ -25,7 +27,18 @@ export {
 export {
   rlpEncode, toRlpInt, stripZeros,
   encodeLegacyUnsigned, encodeLegacySigned, type LegacyTx,
+  encode1559Unsigned, encode1559Signed, encodeAccessList,
+  type Eip1559Tx, type AccessListItem,
 } from './rlp.js';
+export {
+  suggestFees, maxFeeCost, fetchBaseFee, fetchPriorityFee, maxFeeFor, DEFAULT_PRIORITY_FEE,
+  type RpcCall, type FeeSuggestion,
+} from './fees.js';
+export { base58 } from './base58.js';
+export {
+  encodeType, typeHash, hashStruct, domainSeparator, hashTypedData,
+  type TypedData, type TypedTypes, type TypedField, type TypedDataHashes,
+} from './eip712.js';
 export type {
   DeviceInfo, DeviceState, AccountInfo, Signature,
   SignOptions, ChallengeCallbacks, Eip1193Provider,

@@ -8,36 +8,40 @@
  * 개인키는 보드 밖으로 나오지 않는다. 이 페이지는 서명되지 않은 트랜잭션을
  * 만들어 보드에 보내고, 보드가 버튼 승인을 받아 서명한 것을 돌려받아 RPC 로
  * 흘려보낼 뿐이다.
+ *
+ * 화면 조각은 `components/`, 폼 값으로 트랜잭션을 만드는 일은 `tx.ts`,
+ * 수수료 규칙은 SDK 의 `suggestFees` 가 provider 와 같이 쓴다. 이 파일은 상태를 들고 버튼과 SDK 호출을 잇는다.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { NuWallet, NuWalletProvider, WalletError } from '@/sdk/src/index';
+import {
+  NuWallet, NuWalletProvider, hashTypedData, hex, maxFeeCost, suggestFees,
+} from '@/sdk/src/index';
 import s from './dapp.module.css';
 import { WebAppFooter } from '../components/WebAppFooter';
-
-/* 체인 프리셋. RPC 는 사용자가 직접 넣게 둔다 — 공개 엔드포인트를 코드에
- * 박아 두면 금방 죽고, 데모용 키를 넣어 두면 그게 곧 유출이다. */
-const PRESETS = [
-  { name: 'Base Sepolia 테스트넷', chainId: 84532, rpc: 'https://sepolia.base.org', symbol: 'ETH' },
-  { name: 'Holesky 테스트넷', chainId: 17000, rpc: 'https://ethereum-holesky-rpc.publicnode.com', symbol: 'ETH' },
-  { name: '로컬 노드 (anvil/hardhat)', chainId: 31337, rpc: 'http://127.0.0.1:8545', symbol: 'ETH' },
-  { name: 'Ethereum 메인넷', chainId: 1, rpc: '', symbol: 'ETH' },
-];
-
-type LogLine = { dir: 'in' | 'out' | 'err'; text: string };
+import { formatEther } from '../lib/ether';
+import { useApproval } from '../lib/approval';
+import { useTask } from '../lib/task';
+import { PRESETS } from './presets';
+import { buildPermit, buildTxParams, withFees, type TxForm, type TxParams } from './tx';
+import { useDappProvider } from './useDappProvider';
+import { ChainCard } from './components/ChainCard';
+import { AccountCard } from './components/AccountCard';
+import { TransactionCard } from './components/TransactionCard';
+import { MessageCard } from './components/MessageCard';
+import { LogPanel, type LogLine } from './components/LogPanel';
 
 export default function DappDemo() {
   const wallet = useMemo(() => new NuWallet(), []);
 
   const [presetIdx, setPresetIdx] = useState(0);
-  const [chainId, setChainId] = useState(String(PRESETS[0]!.chainId));
-  const [rpcUrl, setRpcUrl] = useState(PRESETS[0]!.rpc);
+  const [chainId, setChainId] = useState(String(PRESETS[0].chainId));
+  const [rpcUrl, setRpcUrl] = useState<string>(PRESETS[0].rpc);
   const [path, setPath] = useState("m/44'/60'/0'/0/0");
 
   const [account, setAccount] = useState('');
   const [balance, setBalance] = useState('');
   const [nonce, setNonce] = useState('');
-  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('보드를 연결하고 체인을 고르세요.');
 
   const [to, setTo] = useState('0x3FFd98B1f972043a824F05E6821e793B26c72794');
@@ -45,47 +49,23 @@ export default function DappDemo() {
   const [data, setData] = useState('');
   const [message, setMessage] = useState('NuWallet 로 서명한 메시지');
 
-  const [approval, setApproval] = useState<{ steps: number; done: number } | null>(null);
   const [log, setLog] = useState<LogLine[]>([]);
-
-  const providerRef = useRef<NuWalletProvider | null>(null);
-
   const say = useCallback((dir: LogLine['dir'], text: string) => {
     setLog((l) => [...l.slice(-60), { dir, text }]);
   }, []);
 
-  /** 설정이 바뀌면 provider 를 새로 만든다. chainId 는 서명에 들어가므로
-   *  옛 설정으로 서명하는 일이 없어야 한다. */
-  const provider = useCallback(() => {
-    const p = new NuWalletProvider(wallet, {
-      chainId: Number(chainId) || 0,
-      rpcUrl: rpcUrl || undefined,
-      path,
-      onStart: (i) => {
-        setApproval({ steps: i.steps, done: 0 });
-        setStatus('보드의 버튼을 1 → 2 → 3 → 4 순서로 누르세요.');
-      },
-      onProgress: (i) => setApproval((a) => (a ? { ...a, done: i.step } : a)),
-    });
-    providerRef.current = p;
-    return p;
-  }, [wallet, chainId, rpcUrl, path]);
+  const { approval, callbacks, clear } = useApproval(setStatus);
+  const provider = useDappProvider(wallet, { chainId, rpcUrl, path }, callbacks);
 
-  const run = useCallback(async (label: string, task: () => Promise<void>) => {
-    setBusy(true);
-    say('out', `→ ${label}`);
-    try {
-      await task();
-    } catch (e) {
-      const msg = e instanceof WalletError ? `${e.message} (0x${e.status.toString(16)})`
-                : e instanceof Error ? e.message : String(e);
-      say('err', `✗ ${msg}`);
-      setStatus(msg);
-    } finally {
-      setBusy(false);
-      setApproval(null);
-    }
+  const onBegin = useCallback((label: string) => say('out', `→ ${label}`), [say]);
+  const onError = useCallback((_label: string, msg: string) => {
+    say('err', `✗ ${msg}`);
+    setStatus(msg);
   }, [say]);
+  const { busy, run } = useTask({ onBegin, onError, onSettled: clear });
+
+  const form: TxForm = { chainId, account, to, value, data };
+  const preset = PRESETS[presetIdx]!;
 
   function applyPreset(i: number) {
     const p = PRESETS[i];
@@ -95,18 +75,10 @@ export default function DappDemo() {
     setRpcUrl(p.rpc);
   }
 
-  const connect = () => run('지갑 연결', async () => {
-    if (!NuWallet.isSupported) {
-      throw new Error('Web Bluetooth 를 지원하지 않습니다. Chrome/Edge 의 HTTPS 또는 localhost 에서 열어주세요.');
-    }
-    const p = provider();
-    const accounts = await p.request({ method: 'eth_requestAccounts' }) as string[];
-    const addr = accounts[0] ?? '';
-    setAccount(addr);
-    say('in', `계정 ${addr}`);
-    setStatus(`연결됨 — ${wallet.deviceName || 'NuWallet'}`);
-    await refresh(p, addr);
-  });
+  function providerOrThrow(): NuWalletProvider {
+    if (!account) throw new Error('먼저 지갑을 연결하세요.');
+    return provider;
+  }
 
   async function refresh(p: NuWalletProvider, addr: string) {
     if (!rpcUrl) { setBalance(''); setNonce(''); return; }
@@ -119,44 +91,59 @@ export default function DappDemo() {
     say('in', `잔액 ${formatEther(BigInt(bal))} ETH · nonce ${BigInt(n)}`);
   }
 
+  const connect = () => run('지갑 연결', async () => {
+    if (!NuWallet.isSupported) {
+      throw new Error('Web Bluetooth 를 지원하지 않습니다. Chrome/Edge 의 HTTPS 또는 localhost 에서 열어주세요.');
+    }
+    const accounts = await provider.request({ method: 'eth_requestAccounts' }) as string[];
+    const addr = accounts[0] ?? '';
+    setAccount(addr);
+    say('in', `계정 ${addr}`);
+    setStatus(`연결됨 — ${wallet.deviceName || 'NuWallet'}`);
+    await refresh(provider, addr);
+  });
+
   const reload = () => run('상태 갱신', async () => {
-    const p = providerRef.current ?? provider();
-    if (!account) throw new Error('먼저 지갑을 연결하세요.');
-    await refresh(p, account);
+    await refresh(providerOrThrow(), account);
     setStatus('최신 상태로 갱신했습니다.');
   });
 
   /** 서명만 하고 보내지 않는다. 무엇이 서명되는지 눈으로 보라고 넣은 경로다. */
   const signOnly = () => run('eth_signTransaction (전송 안 함)', async () => {
     const raw = await providerOrThrow().request({
-      method: 'eth_signTransaction', params: [txParams()],
+      method: 'eth_signTransaction', params: [buildTxParams(form)],
     }) as string;
     say('in', `서명된 raw 트랜잭션\n${raw}`);
     setStatus('서명 완료 — 아직 브로드캐스트하지 않았습니다.');
   });
 
+  /** 수수료를 먼저 정해 트랜잭션에 박고, 그 상한으로 잔액을 확인한 뒤 보낸다.
+   *  예전에는 eth_gasPrice 로 어림했는데, type 2 로 나가면 지갑이 잡는 상한
+   *  (baseFee × 2 + tip) 이 더 커서 확인을 통과하고도 노드가 거부할 수 있었다. */
   const send = () => run('eth_sendTransaction', async () => {
     const p = providerOrThrow();
-    const tx = txParams();
-    const [balanceHex, gasPriceHex] = await Promise.all([
-      p.request({ method: 'eth_getBalance', params: [account, 'pending'] }) as Promise<string>,
-      p.request({ method: 'eth_gasPrice', params: [] }) as Promise<string>,
+    const rpc = (method: string, params: unknown[]) => p.request({ method, params });
+    const [balanceHex, fees] = await Promise.all([
+      rpc('eth_getBalance', [account, 'pending']) as Promise<string>,
+      suggestFees(rpc),
     ]);
+    const priced = withFees(buildTxParams(form), fees);
+    const gasLimit = BigInt(priced.gas ?? await rpc('eth_estimateGas', [priced]) as string);
+    const tx: TxParams = { ...priced, gas: '0x' + gasLimit.toString(16) };
     const available = BigInt(balanceHex);
-    const gasPrice = BigInt(gasPriceHex);
-    const gasLimit = BigInt(tx.gas ?? '0x5208');
-    const required = BigInt(tx.value) + gasLimit * gasPrice;
+    const required = BigInt(tx.value ?? '0x0') + maxFeeCost(fees, gasLimit);
     if (available < required) {
       throw new Error(
-        `Base Sepolia 잔액 부족: 보유 ${formatEther(available)} ETH, ` +
-        `필요 ${formatEther(required)} ETH (전송액 + 예상 수수료)`);
+        `잔액 부족: 보유 ${formatEther(available)} ETH, ` +
+        `필요 ${formatEther(required)} ETH (전송액 + 수수료 상한)`);
     }
-    const hash = await p.request({
-      method: 'eth_sendTransaction', params: [tx],
-    }) as string;
+    say('out', fees.kind === 'eip1559'
+      ? `type 2 · maxFeePerGas ${fees.maxFeePerGas} · tip ${fees.maxPriorityFeePerGas}`
+      : `legacy · gasPrice ${fees.gasPrice}`);
+    const hash = await p.request({ method: 'eth_sendTransaction', params: [tx] }) as string;
     say('in', `트랜잭션 해시 ${hash}`);
     setStatus(`전송됨 — ${hash}`);
-    if (account) await refresh(providerOrThrow(), account);
+    await refresh(p, account);
   });
 
   const personalSign = () => run('personal_sign', async () => {
@@ -169,43 +156,21 @@ export default function DappDemo() {
     setStatus('메시지에 서명했습니다.');
   });
 
-  function providerOrThrow(): NuWalletProvider {
-    if (!account) throw new Error('먼저 지갑을 연결하세요.');
-    return providerRef.current ?? provider();
-  }
+  /** EIP-712. SDK 가 구조체를 두 해시로 줄이고, 보드는 그 둘만 받아 서명한다.
+   *  permit 을 쓰는 DApp 이 실제로 거치는 경로가 이것이다. */
+  const signTypedData = () => run('eth_signTypedData_v4', async () => {
+    const typed = buildPermit(form);
+    const hashes = hashTypedData(typed);
+    say('out', `domainSeparator ${hex(hashes.domainSeparator)}`);
+    say('out', `messageHash     ${hex(hashes.messageHash)}`);
+    const sig = await providerOrThrow().request({
+      method: 'eth_signTypedData_v4', params: [account, JSON.stringify(typed)],
+    }) as string;
+    say('in', `서명 ${sig}`);
+    setStatus('EIP-712 구조체에 서명했습니다.');
+  });
 
-  function txParams() {
-    validateTransactionInputs();
-    const t: Record<string, string> = { from: account };
-    if (to.trim()) t.to = to.trim();
-    if (data.trim()) t.data = data.trim();
-    t.value = '0x' + parseEther(value).toString(16);
-    // 단순 ETH 전송은 gas를 고정해 잔액이 없는 계정에서도
-    // eth_signTransaction 자체를 테스트할 수 있게 한다.
-    if (!data.trim()) t.gas = '0x5208';
-    return t;
-  }
-
-  function validateTransactionInputs() {
-    if (!Number.isSafeInteger(Number(chainId)) || Number(chainId) <= 0) {
-      throw new Error('chainId는 0보다 큰 정수여야 합니다.');
-    }
-    if (!/^0x[0-9a-fA-F]{40}$/u.test(account)) {
-      throw new Error('발신 주소 형식이 올바르지 않습니다.');
-    }
-    if (to.trim() && !/^0x[0-9a-fA-F]{40}$/u.test(to.trim())) {
-      throw new Error('받는 주소는 0x로 시작하는 20바이트 Ethereum 주소여야 합니다.');
-    }
-    if (!to.trim() && !data.trim()) {
-      throw new Error('받는 주소가 없으면 컨트랙트 생성 bytecode가 DATA에 필요합니다.');
-    }
-    if (data.trim() && !/^0x(?:[0-9a-fA-F]{2})*$/u.test(data.trim())) {
-      throw new Error('DATA는 0x로 시작하는 짝수 길이의 HEX여야 합니다.');
-    }
-    if (parseEther(value) < 0n) throw new Error('전송액은 0 이상이어야 합니다.');
-  }
-
-  const preset = PRESETS[presetIdx]!;
+  const connected = !!account;
 
   return (
     <main className={s.shell}>
@@ -222,8 +187,8 @@ export default function DappDemo() {
         <h1>연결하고,<br /><em>버튼으로 승인하고,</em> 보낸다.</h1>
         <p>
           이 페이지는 <code>@nucode/hw-wallet</code> 의 <code>NuWalletProvider</code> 하나만
-          씁니다. 트랜잭션을 만들어 보드에 보내면, 보드가 LED 로 승인 시퀀스를 띄우고
-          사용자가 버튼을 누른 뒤에야 서명이 돌아옵니다. 개인키는 보드를 떠나지 않습니다.
+          씁니다. 트랜잭션을 만들어 보드에 보내면 보드가 LED 하나를 켜고, 사용자가 그 옆의
+          버튼을 누른 뒤에야 서명이 돌아옵니다. 개인키는 보드를 떠나지 않습니다.
         </p>
       </header>
 
@@ -235,148 +200,31 @@ export default function DappDemo() {
       </p>
 
       <div className={s.grid}>
-        <section className={s.card}>
-          <h2>1. 체인 설정</h2>
-          <p className={s.hint}>
-            chainId 는 EIP-155 서명에 그대로 들어갑니다. 잘못 넣으면 다른 체인에서
-            재생 가능한 서명이 됩니다.
-          </p>
-          <label className={s.field}>
-            <span>프리셋</span>
-            <select value={presetIdx} onChange={(e) => applyPreset(Number(e.target.value))}>
-              {PRESETS.map((p, i) => <option key={p.chainId} value={i}>{p.name} · {p.chainId}</option>)}
-            </select>
-          </label>
-          <div className={s.row}>
-            <label className={s.field}>
-              <span>CHAIN ID</span>
-              <input value={chainId} onChange={(e) => setChainId(e.target.value)} inputMode="numeric" />
-            </label>
-            <label className={s.field}>
-              <span>파생 경로</span>
-              <input value={path} onChange={(e) => setPath(e.target.value)} />
-            </label>
-          </div>
-          <label className={s.field}>
-            <span>RPC URL</span>
-            <input value={rpcUrl} onChange={(e) => setRpcUrl(e.target.value)}
-                   placeholder="https://… (서명 외 호출을 여기로 넘깁니다)" />
-          </label>
-          <div className={s.buttons}>
-            <button className={`${s.btn} ${s.primary}`} onClick={connect} disabled={busy || !!account}>
-              {account ? '연결됨' : '지갑 연결'}
-            </button>
-            <button className={s.btn} onClick={reload} disabled={busy || !account}>상태 갱신</button>
-          </div>
-        </section>
-
-        <section className={s.card}>
-          <h2>2. 계정</h2>
-          <p className={s.hint}>주소는 보드가 파생합니다. 조회에는 버튼 승인이 필요 없습니다.</p>
-          <dl className={s.kv}>
-            <div><dt>주소</dt><dd>{account || '미연결'}</dd></div>
-            <div><dt>잔액</dt><dd>{balance ? `${balance} ${preset.symbol}` : (rpcUrl ? '—' : 'RPC 미설정')}</dd></div>
-            <div><dt>nonce</dt><dd>{nonce || '—'}</dd></div>
-            <div><dt>기기</dt><dd>{wallet.deviceName || '—'}</dd></div>
-          </dl>
-          {approval && (
-            <div className={s.approval}>
-              <strong>보드에서 승인을 기다립니다 ({approval.done}/{approval.steps})</strong>
-              <div className={s.dots}>
-                {Array.from({ length: approval.steps }, (_, i) => (
-                  <span key={i} className={`${s.dot} ${i < approval.done ? s.on : ''}`} />
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className={s.card}>
-          <h2>3. 트랜잭션 전송</h2>
-          <p className={s.hint}>
-            nonce와 gasPrice는 RPC에서 조회하고, 단순 ETH 전송은 gas 21,000을 사용합니다.
-            전송 전에 주소·데이터·chainId와 잔액을 검증합니다.
-            서명 대상은 <code>RLP([nonce,gasPrice,gas,to,value,data,chainId,0,0])</code> 원문이고,
-            <strong> 해시는 보드가 직접 계산</strong>합니다.
-          </p>
-          <label className={s.field}>
-            <span>받는 주소</span>
-            <input value={to} onChange={(e) => setTo(e.target.value)} placeholder="0x… (비우면 컨트랙트 생성)" />
-          </label>
-          <div className={s.row}>
-            <label className={s.field}>
-              <span>보낼 양 ({preset.symbol})</span>
-              <input value={value} onChange={(e) => setValue(e.target.value)} inputMode="decimal" />
-            </label>
-          </div>
-          <label className={s.field}>
-            <span>DATA (선택)</span>
-            <textarea value={data} onChange={(e) => setData(e.target.value)} placeholder="0x…" />
-          </label>
-          <div className={s.buttons}>
-            <button className={s.btn} onClick={signOnly} disabled={busy || !account}>서명만 (전송 안 함)</button>
-            <button className={`${s.btn} ${s.primary}`} onClick={send} disabled={busy || !account || !rpcUrl}>
-              서명하고 전송
-            </button>
-          </div>
-        </section>
-
-        <section className={s.card}>
-          <h2>4. 메시지 서명</h2>
-          <p className={s.hint}>
-            <code>personal_sign</code> (EIP-191). 보드가 접두사를 붙여 해시하므로 호스트가
-            준 해시를 그대로 서명하지 않습니다.
-          </p>
-          <label className={s.field}>
-            <span>메시지</span>
-            <textarea value={message} onChange={(e) => setMessage(e.target.value)} />
-          </label>
-          <div className={s.buttons}>
-            <button className={s.btn} onClick={personalSign} disabled={busy || !account}>
-              메시지 서명
-            </button>
-          </div>
-        </section>
-
-        <section className={`${s.card} ${s.wide}`}>
-          <h2>주고받은 것</h2>
-          <p className={s.hint}>DApp ↔ SDK ↔ 보드 사이에 실제로 오간 호출입니다.</p>
-          <pre className={s.log}>
-            {log.length === 0 ? '아직 아무것도 하지 않았습니다.' : log.map((l, i) => (
-              <span key={i} className={l.dir === 'err' ? s.err : l.dir === 'in' ? s.out : undefined}>
-                {l.text}{'\n'}
-              </span>
-            ))}
-          </pre>
-        </section>
+        <ChainCard
+          presetIdx={presetIdx} onPreset={applyPreset}
+          chainId={chainId} onChainId={setChainId}
+          path={path} onPath={setPath}
+          rpcUrl={rpcUrl} onRpcUrl={setRpcUrl}
+          busy={busy} connected={connected}
+          onConnect={connect} onReload={reload} />
+        <AccountCard
+          account={account} balance={balance} nonce={nonce} deviceName={wallet.deviceName}
+          symbol={preset.symbol} hasRpc={!!rpcUrl} approval={approval} />
+        <TransactionCard
+          to={to} onTo={setTo} value={value} onValue={setValue} data={data} onData={setData}
+          symbol={preset.symbol} busy={busy} connected={connected} hasRpc={!!rpcUrl}
+          onSignOnly={signOnly} onSend={send} />
+        <MessageCard
+          message={message} onMessage={setMessage} busy={busy} connected={connected}
+          onPersonalSign={personalSign} onSignTypedData={signTypedData} />
+        <LogPanel log={log} />
       </div>
 
       <aside className={s.status} aria-live="polite">
-        <span className={`${s.led} ${account ? s.online : ''}`} />
+        <span className={`${s.led} ${connected ? s.online : ''}`} />
         <strong>{status}</strong>
       </aside>
       <WebAppFooter />
     </main>
   );
-}
-
-/* ── 단위 변환 ────────────────────────────────────────────────────────────
-   ethers 를 끌어오지 않는다. 이 페이지가 필요한 건 wei 왕복 하나뿐이고,
-   SDK 를 의존성 없이 쓸 수 있다는 걸 보여주는 것도 예제의 목적이다.        */
-
-function parseEther(v: string): bigint {
-  const t = v.trim();
-  if (!t) return 0n;
-  if (!/^\d*\.?\d*$/.test(t)) throw new Error(`숫자가 아닙니다: ${v}`);
-  const [whole = '0', frac = ''] = t.split('.');
-  if (frac.length > 18) throw new Error('wei 보다 작은 단위는 없습니다 (소수점 18자리까지)');
-  return BigInt(whole || '0') * 10n ** 18n + BigInt((frac + '0'.repeat(18)).slice(0, 18) || '0');
-}
-
-function formatEther(wei: bigint): string {
-  const neg = wei < 0n;
-  const abs = neg ? -wei : wei;
-  const whole = abs / 10n ** 18n;
-  const frac = (abs % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '');
-  return `${neg ? '-' : ''}${whole}${frac ? '.' + frac : ''}`;
 }

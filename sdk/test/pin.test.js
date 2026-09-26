@@ -52,44 +52,45 @@ function challengeStarted(id, steps, cmd) {
 }
 
 test('PIN 검증: 길이와 버튼 번호', () => {
-  assert.doesNotThrow(() => validatePin([0, 1, 2, 3]));
-  assert.doesNotThrow(() => validatePin([]));                 // 제거
-  assert.doesNotThrow(() => validatePin([0, 0, 0, 0, 0, 0, 0, 0]));
-  assert.throws(() => validatePin([0, 1, 2]), WalletError);    // 너무 짧다
-  assert.throws(() => validatePin([0, 1, 2, 3, 0, 1, 2, 3, 0]), WalletError);
-  assert.throws(() => validatePin([0, 1, 2, 4]), WalletError); // 버튼은 0..3
-  assert.throws(() => validatePin([0, 1, 2, -1]), WalletError);
+  // v2 는 6자리 고정이다. 짧아도 길어도 안 된다.
+  assert.doesNotThrow(() => validatePin([0, 1, 2, 3, 0, 1]));
+  assert.throws(() => validatePin([]), WalletError);
+  assert.throws(() => validatePin([0, 1, 2, 3]), WalletError);        // 너무 짧다
+  assert.throws(() => validatePin([0, 1, 2, 3, 0, 1, 2]), WalletError); // 너무 길다
+  assert.throws(() => validatePin([0, 1, 2, 4, 0, 1]), WalletError);  // 버튼은 0..3
+  assert.throws(() => validatePin([0, 1, 2, -1, 0, 1]), WalletError);
 });
 
-test('setPin: 승인 이벤트를 기다린다', async () => {
+test('changePin: 승인 이벤트를 기다린다', async () => {
   const { admin, sent } = fakeDevice({
     responses: { [CMD.SET_PIN]: pending(7) },
     script: ({ emit }) => {
-      emit(EVT.CHALLENGE_STARTED, challengeStarted(7, 4, CMD.SET_PIN));
+      emit(EVT.CHALLENGE_STARTED, challengeStarted(7, 6, CMD.SET_PIN));
       emit(EVT.REQUEST_RESULT, requestResult(7, CMD.SET_PIN, SW.OK));
     },
   });
 
   const steps = [];
-  await admin.setPin([1, 2, 3, 0], { onStart: (i) => steps.push(i.steps) });
+  await admin.changePin({ onStart: (i) => steps.push(i.steps) });
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].cmd, CMD.SET_PIN);
-  assert.deepEqual(sent[0].payload, [4, 1, 2, 3, 0]);   // 길이 접두 + 버튼 번호
-  assert.deepEqual(steps, [4]);
+  // v2 는 PIN 값을 보내지 않는다 — 페이로드가 비어 있다.
+  assert.deepEqual(sent[0].payload, []);
+  assert.deepEqual(steps, [6]);
 });
 
-test('setPin: 기기가 거부하면 그 상태로 실패한다', async () => {
+test('changePin: 기기가 거부하면 그 상태로 실패한다', async () => {
   const { admin } = fakeDevice({
     responses: { [CMD.SET_PIN]: pending(9) },
     script: ({ emit }) => emit(EVT.REQUEST_RESULT,
       requestResult(9, CMD.SET_PIN, SW.CHALLENGE_FAILED)),
   });
-  await assert.rejects(() => admin.setPin([0, 0, 0, 0]),
+  await assert.rejects(() => admin.changePin(),
     (e) => e instanceof WalletError && e.status === SW.CHALLENGE_FAILED && e.isUserRejection);
 });
 
-test('setPin: 다른 요청의 이벤트는 무시한다', async () => {
+test('changePin: 다른 요청의 이벤트는 무시한다', async () => {
   const { admin } = fakeDevice({
     responses: { [CMD.SET_PIN]: pending(11) },
     script: ({ emit }) => {
@@ -97,31 +98,30 @@ test('setPin: 다른 요청의 이벤트는 무시한다', async () => {
       emit(EVT.REQUEST_RESULT, requestResult(11, CMD.SET_PIN, SW.OK));
     },
   });
-  await admin.setPin([3, 3, 3, 3]);   // 완료되면 성공
+  await admin.changePin();            // 완료되면 성공
 });
 
-test('clearPin: 길이 0 을 보낸다', async () => {
-  const { admin, sent } = fakeDevice({
-    responses: { [CMD.SET_PIN]: pending(1) },
-    script: ({ emit }) => emit(EVT.REQUEST_RESULT, requestResult(1, CMD.SET_PIN, SW.OK)),
-  });
-  await admin.clearPin();
-  assert.deepEqual(sent[0].payload, [0]);
+test('PIN 은 없앨 수 없다 — clearPin 은 사라졌다', () => {
+  // v2 는 셋업에서 PIN 을 강제한다. PIN 없는 레코드는 봉인 키가 공개값이라
+  // 플래시만 뜨면 열린다. 그래서 제거 API 자체를 두지 않는다.
+  const admin = new NuWalletAdmin({ transport: {} });
+  assert.equal('clearPin' in admin, false);
 });
 
-test('unlock: PIN 이 없으면 즉시 주소를 돌려준다', async () => {
-  const addr = new Uint8Array(20).fill(0xab);
-  const { admin, sent } = fakeDevice({
-    responses: { [CMD.UNLOCK]: { status: SW.OK, payload: addr } },
+test('unlock: v2 는 언제나 기기에서 PIN 을 받는다', async () => {
+  // v1 은 PIN 이 없으면 즉시 열리고 주소를 돌려줬다. v2 는 PIN 이 항상 있으므로
+  // 그 경로가 없다 — 반드시 PENDING 을 거친다.
+  const { admin } = fakeDevice({
+    responses: { [CMD.UNLOCK]: pending(9) },
+    script: ({ emit }) => emit(EVT.REQUEST_RESULT, requestResult(9, CMD.UNLOCK, SW.OK)),
   });
-  const got = await admin.unlock();
-  assert.equal(got.toLowerCase(), '0x' + 'ab'.repeat(20));
-  assert.deepEqual(sent[0].payload, []);      // 패스프레이즈 없음 = 빈 페이로드
+  assert.equal(await admin.unlock(''), undefined);
 });
 
 test('unlock: 패스프레이즈는 UTF-8 로 실려 나간다', async () => {
   const { admin, sent } = fakeDevice({
-    responses: { [CMD.UNLOCK]: { status: SW.OK, payload: new Uint8Array(20) } },
+    responses: { [CMD.UNLOCK]: pending(11) },
+    script: ({ emit }) => emit(EVT.REQUEST_RESULT, requestResult(11, CMD.UNLOCK, SW.OK)),
   });
   await admin.unlock('한글pass');
   assert.deepEqual(sent[0].payload, Array.from(new TextEncoder().encode('한글pass')));

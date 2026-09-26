@@ -1,5 +1,6 @@
 import { NuWallet } from './client.js';
-import { DEFAULT_PATHS, fromHex } from './protocol.js';
+import { fromHex } from './bytes.js';
+import { DEFAULT_PATHS } from './path.js';
 import type { ChallengeCallbacks } from './types.js';
 
 export interface SolanaTransactionLike {

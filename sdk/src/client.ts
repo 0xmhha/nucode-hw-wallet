@@ -4,17 +4,19 @@
  * 프로토콜 인코딩은 protocol.ts, BLE 는 transport.ts 가 맡는다.
  * 여기서는 명령을 의미 있는 API 로 감싸고, 서명 승인의 비동기 흐름을 다룬다.
  */
-import {
-  CMD, EVT, SW, WalletError, DEFAULT_PATHS,
-  encodeChainPath, concat, hex, fromHex, type Chain,
-} from './protocol.js';
+import { concat, hex, fromHex } from './bytes.js';
+import { CMD, EVT, SW, WalletError } from './constants.js';
+import { DEFAULT_PATHS, encodeChainPath, type Chain } from './path.js';
 import { BleTransport, type TransportOptions } from './transport.js';
 import { toChecksumAddress } from './address.js';
+import { base58 } from './base58.js';
+import { takeSig, makeSignature } from './signature.js';
 import type {
   DeviceInfo, DeviceState, AccountInfo, Signature, SignOptions,
 } from './types.js';
 
 const DEFAULT_SIGN_TIMEOUT = 70_000;   // 기기 챌린지 제한 60초 + 여유
+const DEFAULT_POLL_MS = 3_000;         // 결과 알림을 놓쳤는지 되묻는 간격
 
 export class NuWallet {
   readonly transport: BleTransport;
@@ -77,16 +79,25 @@ export class NuWallet {
     return decodeWords(p);
   }
 
-  /** 사용자가 백업했음을 확인하고 저장한다. 첫 주소를 돌려준다. */
-  async confirmSetup(words: number[]): Promise<string> {
-    const p = await this.cmd(CMD.SETUP_CONFIRM, encodeWords(words));
-    return toChecksumAddress(hex(p.subarray(0, 20)));
+  /**
+   * 사용자가 백업했음을 확인하고 저장한다.
+   *
+   * v2 부터 여기서 바로 저장되지 않는다. 기기가 **PIN 설정 절차**를 시작하고,
+   * 사용자가 버튼으로 6자리를 두 번 누른 뒤에야 봉인·저장된다. PIN 없이 저장하면
+   * 봉인 키가 공개값이 되어 플래시만 뜨면 열리기 때문이다.
+   *
+   * 끝나면 지갑은 잠금 해제 상태이고, 주소는 이어서 조회해 돌려준다.
+   */
+  async confirmSetup(words: number[], opts: SignOptions = {}): Promise<string> {
+    await this.setupCommand(CMD.SETUP_CONFIRM, encodeWords(words), opts);
+    return this.getAddress('ethereum');
   }
 
-  /** 기존 니모닉으로 복구한다. BIP-39 체크섬을 기기가 검증한다. */
-  async restore(words: number[]): Promise<string> {
-    const p = await this.cmd(CMD.SETUP_RESTORE, encodeWords(words));
-    return toChecksumAddress(hex(p.subarray(0, 20)));
+  /** 기존 니모닉으로 복구한다. BIP-39 체크섬을 기기가 검증한다.
+   *  confirmSetup 과 마찬가지로 PIN 설정을 거친다. */
+  async restore(words: number[], opts: SignOptions = {}): Promise<string> {
+    await this.setupCommand(CMD.SETUP_RESTORE, encodeWords(words), opts);
+    return this.getAddress('ethereum');
   }
 
   /** 지갑을 지운다. 기기에서 버튼 승인이 필요하다. */
@@ -178,6 +189,27 @@ export class NuWallet {
   }
 
   /**
+   * 셋업 계열. 기기가 PENDING 을 주고, 사용자가 버튼으로 PIN 을 정한 뒤에야
+   * 봉인·저장된다.
+   *
+   * v1 펌웨어는 이 자리에서 OK 를 주고 **PIN 없이** 저장했다. 그 레코드는
+   * 봉인 키가 `PBKDF2("", salt)` 이고 salt 가 평문이라 플래시만 뜨면 열린다.
+   * 조용히 받아주면 사용자는 잠긴 줄 알지만 잠기지 않은 지갑을 갖게 되므로,
+   * 분명한 오류를 낸다.
+   */
+  private async setupCommand(cmd: number, payload: Uint8Array,
+                             opts: SignOptions): Promise<void> {
+    const first = await this.transport.send(cmd, payload);
+    if (first.status === SW.OK) {
+      throw new WalletError(SW.DEVICE_ERROR,
+        '펌웨어가 낡았습니다 (프로토콜 v1). 이 펌웨어는 PIN 없이 지갑을 저장하며, ' +
+        '그 저장은 암호화된 것이 아닙니다. 보드에 최신 펌웨어를 올린 뒤 다시 하세요.');
+    }
+    if (first.status !== SW.PENDING) throw new WalletError(first.status);
+    await this.awaitApproval(first.payload, opts);
+  }
+
+  /**
    * PENDING 을 받고 이벤트로 결과를 기다리는 명령의 공통 흐름.
    * docs/protocol.md §7 참고.
    */
@@ -185,8 +217,14 @@ export class NuWallet {
                                opts: SignOptions): Promise<Uint8Array> {
     const first = await this.transport.send(cmd, payload);
     if (first.status !== SW.PENDING) throw new WalletError(first.status);
-    if (first.payload.length < 4) throw new WalletError(SW.DEVICE_ERROR, 'requestId 없음');
-    const dv = new DataView(first.payload.buffer, first.payload.byteOffset, first.payload.byteLength);
+    return this.awaitApproval(first.payload, opts);
+  }
+
+  /** PENDING 응답을 받은 뒤, 기기가 결과 이벤트를 보낼 때까지 기다린다. */
+  private async awaitApproval(firstPayload: Uint8Array,
+                              opts: SignOptions): Promise<Uint8Array> {
+    if (firstPayload.length < 4) throw new WalletError(SW.DEVICE_ERROR, 'requestId 없음');
+    const dv = new DataView(firstPayload.buffer, firstPayload.byteOffset, firstPayload.byteLength);
     const requestId = dv.getUint32(0, false);
 
     const timeoutMs = opts.timeoutMs ?? DEFAULT_SIGN_TIMEOUT;
@@ -197,6 +235,7 @@ export class NuWallet {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        clearPoller();
         off();
         offDisc();
         opts.signal?.removeEventListener('abort', onAbort);
@@ -218,7 +257,10 @@ export class NuWallet {
         if (edv.getUint32(0, false) !== requestId) return;
 
         if (e.evt === EVT.CHALLENGE_STARTED && p.length >= 6) {
-          opts.onStart?.({ requestId, steps: p[4]!, command: p[5]! });
+          opts.onStart?.({
+            requestId, steps: p[4]!, command: p[5]!,
+            kind: p.length >= 7 ? p[6]! : 0,
+          });
         } else if (e.evt === EVT.CHALLENGE_PROGRESS && p.length >= 6) {
           opts.onProgress?.({ requestId, step: p[4]!, attemptsLeft: p[5]! });
         } else if (e.evt === EVT.SIGN_RESULT && p.length >= 6) {
@@ -226,13 +268,40 @@ export class NuWallet {
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(p.subarray(6)));
         } else if (e.evt === EVT.REQUEST_RESULT && p.length >= 7) {
-          // WIPE 처럼 서명이 아닌 승인 요청의 결과. 돌려줄 페이로드가 없다.
-          // 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6.
+          /* 서명이 아닌 승인(셋업·PIN 변경·WIPE)의 결과. 페이로드는 없다.
+           * 이걸 안 보면 WIPE 가 영원히 안 끝난다 — docs/protocol.md §6. */
           const status = edv.getUint16(5, false);
           if (status !== SW.OK) finish(() => reject(new WalletError(status)));
           else finish(() => resolve(new Uint8Array()));
         }
       });
+
+      /* 알림을 놓쳤을 때의 복구 경로 (docs/protocol.md 0x40 GET_RESULT).
+       *
+       * 기기는 마지막 요청의 결과를 기억해 두고, 되물으면 알림과 같은 바이트를
+       * 돌려준다 — STATUS(2) 뒤에 서명 요청이면 SIG_LEN‖SIG, 아니면 없음.
+       * 아직 승인 중이면 STATUS 자리에 PENDING 이 온다. 알림이 먼저 오면
+       * finish() 가 한 번만 통과시키므로 둘이 겹쳐도 결과는 하나다. */
+      const pollMs = opts.pollMs ?? DEFAULT_POLL_MS;
+      let polling = false;
+      const poll = async () => {
+        if (done || polling) return;
+        polling = true;
+        try {
+          const r = await this.transport.send(CMD.GET_RESULT, be32(requestId));
+          if (done || r.status !== SW.OK || r.payload.length < 2) return;
+          const status = (r.payload[0]! << 8) | r.payload[1]!;
+          if (status === SW.PENDING) return;
+          if (status !== SW.OK) finish(() => reject(new WalletError(status)));
+          else finish(() => resolve(r.payload.subarray(2)));
+        } catch {
+          /* 되묻기 실패는 치명적이지 않다. 알림이나 다음 되묻기를 기다린다. */
+        } finally {
+          polling = false;
+        }
+      };
+      const poller = pollMs > 0 ? setInterval(() => { void poll(); }, pollMs) : undefined;
+      const clearPoller = () => { if (poller) clearInterval(poller); };
       const offDisc = this.transport.onDisconnect(() => {
         finish(() => reject(new WalletError(SW.DEVICE_ERROR, '기기 연결이 끊겼습니다')));
       });
@@ -262,75 +331,5 @@ function decodeWords(p: Uint8Array): number[] {
   const dv = new DataView(p.buffer, p.byteOffset, p.byteLength);
   const out: number[] = [];
   for (let i = 0; i < n; i++) out.push(dv.getUint16(1 + i * 2, false));
-  return out;
-}
-
-/** SIG_LEN ‖ SIGNATURE 에서 서명만 꺼낸다. */
-function takeSig(raw: Uint8Array, expectedLength: number): Uint8Array {
-  /* 초기 Arduino 펌웨어는 SIG_LEN 없이 서명만 보냈다. 전체 길이가 체인별
-   * 고정 길이와 정확히 같을 때만 레거시 응답으로 인정한다. */
-  if (raw.length === expectedLength) return raw;
-  if (raw.length < 1) throw new WalletError(SW.DEVICE_ERROR, '서명이 비어 있습니다');
-  const n = raw[0]!;
-  if (n !== expectedLength || raw.length !== 1 + n) {
-    throw new WalletError(SW.DEVICE_ERROR,
-      `서명 길이가 맞지 않습니다 (SIG_LEN=${n}, 실제 ${raw.length - 1})`);
-  }
-  return raw.subarray(1, 1 + n);
-}
-
-type VMode = 'legacy' | 'eip155' | 'typed';
-
-/**
- * 기기가 준 r ‖ s ‖ recid 를 Ethereum 서명으로 만든다.
- * v 계산 규칙은 docs/protocol.md §6 참고.
- */
-function makeSignature(raw: Uint8Array, mode: VMode, chainId?: number): Signature {
-  /* docs/protocol.md §6: SIG_LEN(1) ‖ SIGNATURE
-   *
-   * 길이 접두사를 "있으면 쓰고 없으면 만다" 식으로 추측하면 안 된다.
-   * r 의 첫 바이트가 우연히 64 인 서명이 256개 중 하나꼴로 나오는데, 그때
-   * 한 바이트를 잘라내고 엉뚱한 서명을 만들어 낸다. */
-  const body = takeSig(raw, 65);
-  if (body.length !== 65) {
-    throw new WalletError(SW.DEVICE_ERROR,
-      `Ethereum 서명은 65바이트여야 합니다 (받은 길이 ${body.length})`);
-  }
-  const r = body.subarray(0, 32);
-  const s = body.subarray(32, 64);
-  const recid = body[64]!;
-
-  let v: number;
-  if (mode === 'typed') v = recid;                       // yParity
-  else if (mode === 'eip155') {
-    if (chainId === undefined) {
-      throw new WalletError(SW.BAD_PARAM, 'EIP-155 서명에는 chainId 가 필요합니다');
-    }
-    v = recid + chainId * 2 + 35;
-  } else v = recid + 27;
-
-  return {
-    r: hex(r), s: hex(s), recid, v,
-    serialized: hex(concat(r, s, new Uint8Array([v & 0xff]))),
-  };
-}
-
-
-/** Solana 주소는 공개키의 base58 이다. 의존성 없이 짧게 구현한다. */
-function base58(b: Uint8Array): string {
-  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  const digits: number[] = [0];
-  for (const byte of b) {
-    let carry = byte;
-    for (let i = 0; i < digits.length; i++) {
-      carry += digits[i]! << 8;
-      digits[i] = carry % 58;
-      carry = (carry / 58) | 0;
-    }
-    while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
-  }
-  let out = '';
-  for (const byte of b) { if (byte === 0) out += A[0]; else break; }
-  for (let i = digits.length - 1; i >= 0; i--) out += A[digits[i]!];
   return out;
 }

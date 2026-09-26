@@ -25,7 +25,9 @@ export interface AccountInfo {
 /** 기기가 서명을 승인받는 동안 SDK 가 호출하는 콜백. */
 export interface ChallengeCallbacks {
   /** 기기가 LED 로 시퀀스를 표시하기 시작했다. steps 는 눌러야 하는 횟수. */
-  onStart?: (info: { requestId: number; steps: number; command: number }) => void;
+  /** 기기가 승인 절차를 시작했다. `kind` 는 APPROVAL.* — 무엇을 띄울지 결정한다. */
+  onStart?: (info: { requestId: number; steps: number; command: number;
+                     kind: number }) => void;
   /** 사용자가 한 단계 맞게 눌렀다. */
   onProgress?: (info: { requestId: number; step: number; attemptsLeft: number }) => void;
 }
@@ -45,6 +47,11 @@ export interface Signature {
 export interface SignOptions extends ChallengeCallbacks {
   /** 승인 대기 타임아웃(ms). 기본 70초 — 기기 챌린지 제한이 60초다. */
   timeoutMs?: number;
+  /**
+   * 결과 알림을 놓쳤을 때를 대비해 `GET_RESULT` 로 되묻는 간격(ms). 기본 3초.
+   * BLE notify 는 구독 직후나 링크가 불안할 때 실제로 빠진다. 0 이면 되묻지 않는다.
+   */
+  pollMs?: number;
   signal?: AbortSignal;
 }
 

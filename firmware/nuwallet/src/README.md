@@ -2,7 +2,7 @@
 
 Zephyr 펌웨어가 `CMakeLists.txt` 에서 여기를 직접 참조하고, 호스트 테스트
 (`firmware/test/`)도 같은 파일을 컴파일한다. **보드용 코드는 여기 없다** —
-펌웨어 본체는 `firmware/zephyr/` 다.
+펌웨어 본체는 `firmware/wallet/` 다.
 
 | 디렉터리 | 역할 | 쓰는 곳 |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ Zephyr 펌웨어가 `CMakeLists.txt` 에서 여기를 직접 참조하고, 호�
 
 ## 유지 규칙
 
-- **`crypto/` 와 `micro-ecc/` 는 경로를 바꾸지 말 것.** `firmware/zephyr/CMakeLists.txt`
+- **`crypto/` 와 `micro-ecc/` 는 경로를 바꾸지 말 것.** `firmware/wallet/CMakeLists.txt`
   의 `set(SHARED ...)` 와 `firmware/test/Makefile` 이 상대 경로로 직접 가리킨다.
 - micro-ecc 는 원본이 아니다. `uECC.c` · `uECC.h` 에 `NuWallet 패치` 주석이 붙은
   구간이 있다 — recovery id 노출, 외부 k 서명, 기본 RNG 비활성화 세 가지다.
