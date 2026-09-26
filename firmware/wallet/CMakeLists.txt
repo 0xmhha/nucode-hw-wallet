@@ -18,6 +18,9 @@ target_sources(app PRIVATE
     ${SHARED}/core/session.c
     ${SHARED}/core/challenge.c
     ${SHARED}/core/commands.c
+    ${SHARED}/core/cmd_setup.c
+    ${SHARED}/core/cmd_ethereum.c
+    ${SHARED}/core/cmd_solana.c
     ${SHARED}/core/wallet.c
 
     src/port/zephyr/hal_zephyr.c

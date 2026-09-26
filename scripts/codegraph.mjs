@@ -48,7 +48,7 @@ const LAYERS = [
   { id: 'sdk.barrel', match: /^sdk\/src\/index\./,                       may: ['*'] },
   { id: 'sdk.test',   match: /^sdk\/test\//,                             may: ['*'] },
 
-  { id: 'web.shell',  match: /^app\/(layout|version|components)/,         may: ['sdk.barrel', 'web.shell'] },
+  { id: 'web.shell',  match: /^app\/(layout|version|components|lib)/,         may: ['sdk.barrel', 'web.shell'] },
   { id: 'web.setup',  match: /^app\/(page\.tsx|setup\/)/,                 may: ['sdk.barrel', 'web.shell'] },
   { id: 'web.dapp',   match: /^app\/dapp\//,                              may: ['sdk.barrel', 'web.shell'] },
   { id: 'web.debug',  match: /^app\/debug\//,                             may: ['sdk.barrel', 'web.shell'] },
