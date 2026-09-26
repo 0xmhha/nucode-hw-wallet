@@ -29,22 +29,17 @@ NU-40 DK (nRF52840) 를 BLE 하드웨어 지갑으로 만드는 펌웨어.
 
 ## 보드에 올리기
 
-설치 자체는 UF2 복사로 끝난다 — RESET 두 번 → `NRF52BOOT` 드라이브에 `.uf2` 복사.
-자세한 절차와 `.uf2` 만드는 법은 `docs/nu40-dk-firmware-installation.md` 를 본다.
+빌드 산출물은 저장소에 없다. 소스에서 만든다. 환경 준비부터 올리기까지의 절차는
+`docs/nu40-dk-firmware-installation.md` 에 있다. 준비가 끝났다면 저장소 루트에서:
 
 ```sh
-cd firmware/nuwallet
-arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir ./build .
-CORE=~/Library/Arduino15/packages/nucode/hardware/nrf52/1.0.2
-python3 "$CORE/tools/uf2conv/uf2conv.py" -f 0xADA52840 -c \
-        -o build/NUWALLET.UF2 build/nuwallet.ino.hex
+scripts/build-firmware.sh                        # firmware/nuwallet/build/NUWALLET.UF2 를 만든다
+scripts/build-firmware.sh /dev/cu.usbmodem1101   # 만들고 시리얼 DFU 로 올린다
 ```
 
-**Zephyr 앱은 지금 바로 빌드되지 않는다.** 벤더(nucode)가 제공하는 것은
-`arduino-cli` 코어 하나뿐이고, `nucode_nu40` Zephyr 보드 정의는 저장소에도
-Zephyr 업스트림에도 없다. Zephyr 로 가려면 보드 정의를 직접 써야 한다.
-지갑 코어(`wallet/src/app/` — 플랫폼 독립 순수 C)는 `hal.h` 만 알기 때문에
-포팅 자체는 HAL 하나를 새로 쓰는 일이다.
+**Zephyr 앱(`firmware/wallet`)은 아직 이 저장소만으로는 빌드되지 않는다.** NU-40 DK
+보드 정의가 로컬 Zephyr 트리에 있고, 그것으로 빌드하게 만드는 것이 다음 작업이다
+(`docs/TASKS.md` T14). 코어는 `hal.h` 만 알기 때문에 두 포트가 같은 코어를 쓴다.
 
 ## 보드 없이 테스트
 

@@ -55,12 +55,10 @@ next-env.d.ts
 /firmware/test/protocol_bridge
 /firmware/test/.obj/
 
-# 펌웨어 빌드 산출물 — 이미 히스토리에 7MB 가량 들어가 있다.
-# 보드에 올리는 .uf2 만 남긴다. 설치 문서가 이 파일을 가리키고, 툴체인 없이
-# 굽는 유일한 경로다. elf/map/hex/zip 은 언제든 다시 만든다.
-/firmware/nuwallet/build/*
-!/firmware/nuwallet/build/*.uf2
-!/firmware/nuwallet/build/*.UF2
+# 펌웨어 빌드 산출물은 저장소에 두지 않는다. .uf2 도 마찬가지다.
+# 소스에서 만드는 방법은 docs/nu40-dk-firmware-installation.md 와
+# scripts/build-firmware.sh 에 있다.
+/firmware/nuwallet/build/
 /firmware/build/*.elf
 /firmware/build/*.map
 /firmware/build/*.zip

@@ -1,145 +1,182 @@
-# NU-40 DK 펌웨어 설치 가이드
+# NU-40 DK 펌웨어 빌드와 설치
 
-이 문서는 NU-40 DK(nRF52840) 보드에 `arduino-cli`를 사용하지 않고 펌웨어를 설치하는 방법을 설명한다.
+지갑 펌웨어(`firmware/nuwallet/`)를 소스에서 빌드해 NU-40 DK(nRF52840)에 올리는
+방법이다. 개발 도구가 하나도 없는 머신에서 시작한다고 가정한다.
 
-설치할 것은 **지갑 펌웨어**(`firmware/nuwallet/`) 다. 저장소에 남아 있는 NU-40 PET
-데모는 별개이며, 지갑 웹앱과 함께 쓸 수 없다.
+펌웨어 바이너리(`.uf2`, `.hex`, `.zip`)는 저장소에 두지 않는다. 빌드할 때마다
+내용 전체가 바뀌어 커밋할 때마다 저장소가 수백 KB 씩 커지고, 누군가 다시 빌드해
+커밋하지 않으면 소스와 어긋난다. 그래서 받는 사람이 직접 만든다.
 
-## 권장 방법: UF2 파일 복사
+> 이 절차는 macOS(Apple Silicon, arduino-cli 1.5.1, Python 3.10)에서 빈 환경부터
+> 따라 해서 확인했다. Linux 명령은 같은 도구의 공식 설치 방법을 옮긴 것이고 직접
+> 돌려 보지는 않았다. Windows 는 다루지 않는다.
 
-NU-40 DK에는 Adafruit nRF52 UF2/DFU 부트로더가 탑재되어 있다. 따라서 별도의 플래싱 프로그램 없이 보드를 USB 드라이브로 마운트한 뒤 `.uf2` 파일을 복사할 수 있다.
+## 전체 흐름
 
-설치할 파일은 하나다.
+한 번만 하는 준비가 세 가지 있다. arduino-cli 를 설치하고, 보드 제조사의 코어를
+받고, 업로드 도구 `adafruit-nrfutil` 을 설치한다. 그다음부터는
+`scripts/build-firmware.sh` 하나로 빌드하고 올린다.
 
-```text
-firmware/nuwallet/build/NUWALLET.UF2    지갑 펌웨어
-```
+빌드는 두 단계다. 먼저 `arduino-cli` 가 스케치를 컴파일해 `.hex` 와 DFU 용 `.zip` 을
+만들고, 이어서 코어에 든 변환기가 `.hex` 를 `.uf2` 로 바꾼다. 보드에 올리는 방법도
+두 가지인데, USB 케이블 하나로 명령 한 줄이면 되는 시리얼 DFU 를 권한다.
 
-> ⚠️  **옛 NU-40 PET 데모를 지갑 대신 굽지 않는다.** 두 펌웨어는 서로 다른 BLE
-> 서비스 UUID 를 광고한다 — 지갑은 `6e754000-…`, 데모는 `7d2a0001-…`. 데모가
-> 올라간 보드는 지갑 웹앱의 기기 선택 창에 **아예 나타나지 않는다.**
-> "페어링이 안 된다"로 보이는 증상의 흔한 원인이다. 데모의 `.uf2` 는 저장소에
-> 두지 않는다 (필요하면 `firmware/arduino/nu40_pet/` 에서 만든다).
->
-> 지갑 `.uf2` 의 정본 위치는 `firmware/nuwallet/build/` 하나다 (`.gitignore` 가
-> 이 경로만 추적한다). `firmware/build/` 안에 `NUWALLET.UF2` 가 보인다면 예전
-> 빌드가 남은 것이니 무시하거나 지운다.
+## 1. 한 번만 할 준비
 
-### 설치 순서
+필요한 것은 git, Python 3.8 이상, 인터넷 연결, **USB 데이터 케이블**이다. 충전
+전용 케이블로는 보드가 보이지 않는다. 디스크는 약 1GB 가 필요하다 (대부분
+ARM 컴파일러다).
 
-1. NU-40 DK를 USB 데이터 케이블로 컴퓨터에 연결한다.
-2. 보드의 `RESET` 버튼을 빠르게 두 번 누른다.
-3. 보드가 UF2 부트로더 모드로 진입하면 `NRF52BOOT`라는 USB 드라이브가 나타난다.
-4. `firmware/nuwallet/build/NUWALLET.UF2`를 `NRF52BOOT` 드라이브에 복사한다.
-5. 복사가 끝나면 드라이브가 자동으로 사라지고 보드가 새 펌웨어로 재부팅된다.
+### 1-1. arduino-cli
 
-macOS Finder에서 파일을 드래그해도 되고, 저장소 루트에서 다음 명령을 실행해도 된다.
+macOS:
 
 ```sh
-cp firmware/nuwallet/build/NUWALLET.UF2 /Volumes/NRF52BOOT/
+brew install arduino-cli
 ```
 
-> 복사가 끝나면 드라이브가 스스로 사라진다. macOS 가 "디스크를 제대로 꺼내지
-> 않았습니다" 경고를 띄우는데 정상이다.
-
-마운트 여부는 다음 명령으로 확인한다.
+Linux (직접 돌려 보지 않았다):
 
 ```sh
-ls /Volumes
+curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR=~/.local/bin sh
 ```
 
-`NRF52BOOT`가 출력되면 펌웨어를 복사할 준비가 된 것이다.
+`arduino-cli version` 이 버전을 출력하면 된다.
 
-## `NRF52BOOT`가 나타나지 않을 때
+### 1-2. 보드 코어
 
-- `RESET` 버튼을 천천히 두 번 누르는 것이 아니라 빠르게 연속 두 번 누른다.
-- 충전 전용 케이블이 아닌 USB 데이터 케이블인지 확인한다.
-- USB 허브를 제거하고 컴퓨터의 USB 포트에 직접 연결한다.
-- 다른 USB 포트나 케이블로 다시 시도한다.
-- 기존 애플리케이션이 실행 중인 직렬 포트와 UF2 부트로더 드라이브는 서로 다르다. USB 직렬 포트가 보인다고 해서 부트로더 모드인 것은 아니다.
-
-## 펌웨어 파일 형식과 도구
-
-| 파일 또는 빌드 방식 | 설치 방법 | 용도 |
-| --- | --- | --- |
-| `.uf2` | Finder 또는 `cp`로 `NRF52BOOT`에 복사 | 가장 간단한 권장 방식 |
-| Zephyr 빌드 | `west flash` | Zephyr 워크스페이스와 지원 디버거를 사용하는 경우 |
-| `.hex` | J-Link Commander, OpenOCD 또는 Nordic 도구 | SWD 디버거로 직접 플래시하는 경우 |
-
-일반적인 설치에는 `.hex` 파일이나 SWD 도구가 필요하지 않다. `NUWALLET.UF2` 를
-복사하는 방식이 가장 간단하다.
-
-## 펌웨어를 직접 빌드할 때
-
-설치는 위의 UF2 복사로 끝나지만, `.uf2` 파일 자체는 만들어야 한다.
-
-### 1. 컴파일
-
-벤더가 제공하는 것은 `arduino-cli` 코어 하나뿐이다
-(`~/Library/Arduino15/packages/nucode/hardware/nrf52/`). 보드 정의(`nu40dk`),
-핀 배치(`nu40dk_nrf52840`), 부트로더가 모두 여기 들어 있다.
-
-지갑 펌웨어는 스케치 디렉터리에서 빌드한다. 산출물은 그 옆 `build/` 에 둔다 —
-`firmware/build/` 는 옛 데모 전용이라 섞으면 어느 쪽 `.uf2` 인지 알 수 없게 된다.
+NU-40 DK 의 보드 정의, 핀 배치, ARM 컴파일러, BLE 스택(Bluefruit), 암호 가속
+라이브러리(nRFCrypto), 파일 시스템(LittleFS)이 모두 제조사 코어 하나에 들어 있다.
+따로 설치할 Arduino 라이브러리는 없다.
 
 ```sh
-cd firmware/nuwallet
-arduino-cli compile --fqbn nucode:nrf52:nu40dk --output-dir ./build .
+arduino-cli config init
+arduino-cli config add board_manager.additional_urls \
+  https://raw.githubusercontent.com/Nucode01/Adafruit_nRF52_Arduino/refs/heads/master/package_nuduino_index.json
+arduino-cli core update-index
+arduino-cli core install nucode:nrf52
 ```
 
-### 2. `.hex` → `.uf2`
+마지막 명령이 약 1GB 를 받는다. 끝나면 `arduino-cli core list` 에
+`nucode:nrf52  1.0.2` 가 보인다. `config init` 이 "이미 있다" 고 하면 건너뛴다.
 
-**코어의 UF2 생성 규칙은 `platform.txt` 에서 주석 처리되어 있다.** 그래서
-`arduino-cli compile` 은 `.uf2` 를 만들지 않는다. 변환기를 직접 돌린다.
+### 1-3. adafruit-nrfutil
+
+컴파일 마지막 단계에서 DFU 패키지(`.zip`)를 만들 때와 보드에 올릴 때 쓴다.
+코어에도 들어 있지만 **macOS 용은 그대로 쓸 수 없다.** 실행 권한 없이 풀리고,
+x86_64 바이너리라 Apple Silicon 에서는 Rosetta 까지 필요하다. pip 로 설치한 것을
+쓴다.
+
+시스템 Python 을 건드리지 않도록 가상환경에 넣는다.
 
 ```sh
-CORE=~/Library/Arduino15/packages/nucode/hardware/nrf52/1.0.2
-python3 "$CORE/tools/uf2conv/uf2conv.py" -f 0xADA52840 -c \
-        -o build/NUWALLET.UF2 build/nuwallet.ino.hex
+python3 -m venv ~/.venvs/nuwallet
+~/.venvs/nuwallet/bin/pip install adafruit-nrfutil
 ```
 
-`0xADA52840` 은 nRF52840 의 UF2 family id 다 (`boards.txt` 의
-`nu40dk.build.uf2_family`).
-
-### 3. UF2 없이 바로 올리기
-
-부트로더 모드로 들어가는 것이 귀찮으면 시리얼 DFU 로 바로 올려도 된다.
-`arduino-cli` 가 `adafruit-nrfutil` 을 호출하고, 1200bps 터치로 보드를 알아서
-부트로더에 넣는다. RESET 을 두 번 누를 필요가 없다.
-
-**먼저 `adafruit-nrfutil` 이 있어야 한다.** 코어에 들어 있는 바이너리는 Windows
-용뿐이라 macOS·Linux 에서는 직접 설치한다.
+빌드하는 셸마다 이 가상환경을 켠다.
 
 ```sh
-pip3 install --user adafruit-nrfutil
+source ~/.venvs/nuwallet/bin/activate
+adafruit-nrfutil version        # adafruit-nrfutil version 0.5.3... 이 나오면 된다
 ```
 
-`--output-dir` 로 빌드했다면 업로드에도 같은 경로를 `--input-dir` 로 알려줘야
-한다. 없으면 기본 빌드 캐시를 뒤지다 산출물을 찾지 못한다.
+Linux 는 시리얼 포트를 쓰려면 `dialout` 그룹에 들어가 있어야 한다
+(`sudo usermod -aG dialout $USER` 후 다시 로그인).
+
+## 2. 빌드
+
+저장소 루트에서 한다.
 
 ```sh
-cd firmware/nuwallet
-arduino-cli upload -p /dev/cu.usbmodemXXXX --fqbn nucode:nrf52:nu40dk \
-            --input-dir ./build .
+source ~/.venvs/nuwallet/bin/activate
+scripts/build-firmware.sh
 ```
 
-## Zephyr 는 지금 바로 되지 않는다
+끝나면 `firmware/nuwallet/build/` 에 다음이 생긴다. 이 폴더는 git 이 무시한다.
 
-`west build -b nucode_nu40/nrf52840` 같은 명령을 본 적이 있다면 **동작하지 않는다.**
-`nucode_nu40` 보드 정의는 이 저장소에도, Zephyr 업스트림에도 없다.
-
-Zephyr 로 가려면 보드를 직접 정의해야 한다.
-
-| 필요한 것 | 값 |
+| 파일 | 쓰는 곳 |
 | --- | --- |
-| LED | P0.13 / P0.14 / P0.15 / P0.16 (`LED_STATE_ON = 1`) |
-| 버튼 | P0.11 / P0.12 / P0.24 / P0.25 |
-| 플래시 배치 | SoftDevice S140 v6 가 앞을 차지한다 (`nrf52840_s140_v6.ld`). 앱은 그 뒤에서 시작해야 부트로더가 유지된다 |
-| 출력 | `CONFIG_BUILD_OUTPUT_UF2=y` — 그래야 UF2 복사 방식을 그대로 쓸 수 있다 |
-| 툴체인 | nRF Connect SDK / west 워크스페이스 (1~2GB) |
+| `NUWALLET.UF2` | `NRF52BOOT` 드라이브에 복사해 올린다 |
+| `nuwallet.ino.zip` | 시리얼 DFU 로 올린다 |
+| `nuwallet.ino.hex` | SWD 디버거로 올린다. `.uf2` 는 이것을 변환한 것이다 |
 
-보드 정의를 쓰지 않고 `nrf52840dk/nrf52840` 로 빌드하면 **핀이 달라 LED 와 버튼이
-동작하지 않고**, 부트로더 영역을 덮어써 UF2 복구 경로를 잃을 수 있다.
+스크립트는 두 명령을 돌린다. 직접 치고 싶으면 이렇게 한다.
+
+```sh
+cd firmware/nuwallet
+arduino-cli compile --fqbn nucode:nrf52:nu40dk \
+  --build-property "tools.nrfutil.cmd.macosx=adafruit-nrfutil" \
+  --output-dir ./build .
+CORE=$(arduino-cli config get directories.data)/packages/nucode/hardware/nrf52/1.0.2
+python3 "$CORE/tools/uf2conv/uf2conv.py" -f 0xADA52840 -c \
+  -o build/NUWALLET.UF2 build/nuwallet.ino.hex
+```
+
+`--build-property` 는 1-3 에서 말한 macOS 문제 때문에 붙인다. 코어의 것 대신 PATH 에
+있는 `adafruit-nrfutil` 을 쓰게 한다. Linux 에서는 원래 PATH 의 것을 쓰므로 붙여도
+영향이 없다. UF2 변환을 따로 하는 이유는 코어의 `platform.txt` 가 UF2 생성 규칙을
+주석으로 막아 두었기 때문이다. `0xADA52840` 은 nRF52840 의 UF2 family id 다.
+
+## 3. 보드에 올리기
+
+### 방법 A. 시리얼 DFU (권장)
+
+보드를 USB 로 연결하고 포트 이름을 찾는다.
+
+```sh
+ls /dev/cu.usbmodem*      # macOS
+ls /dev/ttyACM*           # Linux
+```
+
+포트를 넘기면 빌드한 뒤 바로 올린다.
+
+```sh
+scripts/build-firmware.sh /dev/cu.usbmodem1101
+```
+
+1200bps 신호로 보드를 부트로더에 넣기 때문에 버튼을 누를 필요가 없다. 약 12초
+걸린다. 첫 시도가 부트로더가 뜨기 전에 붙어 실패하는 일이 있는데, 스크립트가
+한 번 더 시도한다. 끝에 `Device programmed.` 가 나오면 된다.
+
+### 방법 B. UF2 복사
+
+개발 도구 없이 올릴 때 쓰는 방식이다. 다른 머신에서 빌드한 `NUWALLET.UF2` 만
+받아서 올릴 수도 있다.
+
+1. 보드의 `RESET` 버튼을 빠르게 두 번 누른다.
+2. `NRF52BOOT` 라는 USB 드라이브가 나타난다 (`ls /Volumes`).
+3. `NUWALLET.UF2` 를 그 드라이브에 복사한다.
+
+   ```sh
+   cp firmware/nuwallet/build/NUWALLET.UF2 /Volumes/NRF52BOOT/
+   ```
+
+4. 복사가 끝나면 드라이브가 사라지고 보드가 새 펌웨어로 재부팅된다. macOS 가
+   "디스크를 제대로 꺼내지 않았습니다" 경고를 띄우는데 정상이다.
+
+1200bps 신호로는 이 드라이브가 뜨지 않는다. RESET 두 번이 필요하다.
+
+> ⚠️ **옛 NU-40 PET 데모를 지갑 대신 굽지 않는다.** 두 펌웨어는 서로 다른 BLE
+> 서비스 UUID 를 광고한다 (지갑 `6e754000-…`, 데모 `7d2a0001-…`). 데모가 올라간
+> 보드는 지갑 웹앱의 기기 선택 창에 아예 나타나지 않는다.
+
+## 잘 안 될 때
+
+| 증상 | 원인과 해결 |
+| --- | --- |
+| `fork/exec …/adafruit-nrfutil/macos/adafruit-nrfutil: permission denied` | 코어의 macOS 용 nrfutil 을 쓰려 한 것이다. `scripts/build-firmware.sh` 를 쓰거나 `--build-property "tools.nrfutil.cmd.macosx=adafruit-nrfutil"` 을 붙이고, 가상환경을 켰는지 확인한다 |
+| `adafruit-nrfutil 이 없습니다` | 1-3 의 가상환경을 켜지 않은 셸이다. `source ~/.venvs/nuwallet/bin/activate` |
+| `Failed to upgrade target` 가 두 번 연속 | 포트 이름이 맞는지, 다른 프로그램(시리얼 모니터 등)이 포트를 잡고 있지 않은지 본다. 안 되면 RESET 두 번으로 부트로더에 넣고 방법 B 로 올린다 |
+| `NRF52BOOT` 가 안 나타남 | RESET 을 천천히가 아니라 빠르게 연속 두 번 누른다. 데이터 케이블인지, USB 허브 없이 직접 꽂았는지 본다 |
+| `/dev/cu.usbmodem*` 가 없음 | 데이터 케이블인지 본다. 펌웨어가 멈춰 USB 가 안 뜨면 RESET 두 번 → 방법 B |
+
+## Zephyr 로 빌드하기
+
+지금 보드에 올리는 것은 위의 Arduino 스케치다. `firmware/wallet` 의 Zephyr 앱은
+아직 이 저장소만으로는 빌드되지 않는다. NU-40 DK 용 보드 정의가 로컬 Zephyr 트리
+(`boards/nucode/nucode_nu40/`)에 있고, 그것으로 빌드하게 만드는 일이 다음 작업이다
+(`docs/TASKS.md` 의 T14).
 
 ## 설치 후 확인
 
