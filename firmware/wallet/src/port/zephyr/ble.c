@@ -167,10 +167,20 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     k_spin_unlock(&conn_lock, key);
     atomic_inc(&conn_gen);
     nu_reasm_init(&asm_in);
-    /* 페어링/암호화를 우리 쪽에서 먼저 요구한다. */
-    if (bt_conn_set_security(conn, BT_SECURITY_L2)) {
-        LOG_WRN("보안 수준을 올리지 못했습니다");
-    }
+    /* 페어링은 호스트가 시작하게 둔다. 특성이 암호화를 요구하므로, 본딩이 없는
+     * 호스트는 첫 접근에서 Insufficient Authentication 을 받고 스스로 페어링한다.
+     * Arduino 포트도 보드 쪽에서 먼저 요구하지 않는다.
+     *
+     * 이 포트는 LESC 의 P-256 을 소프트웨어로 해서 페어링이 4초쯤 걸린다. 그동안
+     * 호스트의 첫 요청은 거절되므로, 호스트(SDK 전송 계층)가 그 사이를 기다렸다
+     * 다시 보낸다. 보드 쪽에서 먼저 요구해도 이 4초는 줄지 않았다 (실기기 확인). */
+}
+
+static void security_changed(struct bt_conn *conn, bt_security_t level,
+                             enum bt_security_err err) {
+    ARG_UNUSED(conn);
+    if (err) LOG_WRN("보안 수준을 올리지 못함 (레벨 %d, 오류 %d)", level, err);
+    else     LOG_INF("보안 레벨 %d", level);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -203,6 +213,7 @@ static void recycled(void) {
 BT_CONN_CB_DEFINE(conn_callbacks) = {
     .connected = connected,
     .disconnected = disconnected,
+    .security_changed = security_changed,
     .recycled = recycled,
 };
 

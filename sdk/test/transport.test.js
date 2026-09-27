@@ -14,6 +14,7 @@ import { SERVICE_UUID, RX_UUID, TX_UUID, TAG, SW, frame, WalletError } from '../
 class FakeChar extends EventTarget {
   constructor(uuid, board) { super(); this.uuid = uuid; this.board = board; this.value = undefined; }
   async startNotifications() {
+    if (this.board.failNotifyTimes > 0) { this.board.failNotifyTimes--; throw domError('NotSupportedError', 'Insufficient Authentication'); }
     if (this.board.failNotify) throw this.board.failNotify;
     this.board.notifying = true;
     return this;
@@ -23,6 +24,13 @@ class FakeChar extends EventTarget {
   #write(buf, withResponse) {
     const bytes = new Uint8Array(buf.buffer ?? buf, buf.byteOffset ?? 0, buf.byteLength ?? buf.length);
     this.board.writes.push({ bytes: Array.from(bytes), withResponse });
+    if (withResponse && this.board.failWriteTimes > 0) {
+      this.board.failWriteTimes--;
+      /* macOS 는 거절을 알린 뒤 페어링이 끝나면 그 쓰기를 스스로 다시 보낸다.
+       * 호스트에는 실패로 보였지만 보드에는 도착한다 — 실기기에서 잡혔다. */
+      if (this.board.lateDelivery) setTimeout(() => this.board.onWrite?.(bytes), 5);
+      throw domError('NotSupportedError', 'Insufficient Authentication');
+    }
     if (this.board.failWrite && withResponse) throw this.board.failWrite;
     if (this.board.failWrite && !withResponse) return;   // 응답 없는 쓰기는 조용히 삼켜진다
     this.board.onWrite?.(bytes);
@@ -60,6 +68,7 @@ function makeBoard() {
   const board = {
     linkUp: false, notifying: false, disconnects: 0, chooserCalls: 0,
     writes: [], failNotify: null, failWrite: null, chooserError: null,
+    failNotifyTimes: 0, failWriteTimes: 0, lateDelivery: false, commands: [],
   };
   board.chars = { [RX_UUID]: new FakeChar(RX_UUID, board), [TX_UUID]: new FakeChar(TX_UUID, board) };
   board.device = new FakeDevice(board);
@@ -73,6 +82,7 @@ function makeBoard() {
     if (buf.length < total) return;
     const cmd = buf[0];
     buf = [];
+    board.commands.push(cmd);
     board.reply(cmd);
   };
   /* 응답 페이로드 길이는 명령마다 다르다. 여러 패킷으로 쪼개지는 경우를 만든다. */
@@ -130,14 +140,68 @@ test('첫 패킷은 응답 있는 쓰기로 나간다 — 인증 오류가 묻�
     '첫 패킷이 write-without-response 면 ATT 인증 오류를 알 수 없다');
 });
 
-test('쓰기가 인증 오류로 거부되면 타임아웃을 기다리지 않고 즉시 실패한다', async () => {
+test('쓰기가 계속 거부되면 타임아웃이 아니라 페어링 여유 시간 안에 실패한다', async () => {
   const board = makeBoard();
-  const t = new BleTransport({ timeoutMs: 30_000 });
+  const t = new BleTransport({ timeoutMs: 30_000, pairingRetryMs: 50, pairingRetries: 3 });
   await t.connect();
   board.failWrite = domError('NotSupportedError', 'GATT operation not permitted');
   const started = Date.now();
   await assert.rejects(() => t.send(0x01));
-  assert.ok(Date.now() - started < 1000, '타임아웃까지 기다리면 안 된다');
+  const took = Date.now() - started;
+  assert.ok(took < 1000, `타임아웃까지 기다리면 안 된다 (${took}ms)`);
+  assert.ok(took >= 150, `페어링 여유 시간만큼은 다시 시도해야 한다 (${took}ms)`);
+});
+
+/* 첫 연결에서는 OS 가 페어링을 끝내기 전에 요청이 나간다. 보드가 LESC 의 P-256 을
+ * 소프트웨어로 하면(Zephyr 포트) 페어링에 4초쯤 걸리고, 그동안 암호화를 요구하는
+ * 특성은 Insufficient Authentication 으로 거절된다. 한 번에 포기하면 첫 연결이
+ * 늘 깨진다 — 실기기에서 잡혔다. */
+test('페어링이 늦게 끝나도 알림 구독을 다시 시도해 연결한다', async () => {
+  const board = makeBoard();
+  const t = new BleTransport({ pairingRetryMs: 1 });
+  board.failNotifyTimes = 2;
+  await t.connect();
+  assert.equal(t.isConnected, true);
+  assert.equal(board.notifying, true);
+});
+
+test('페어링이 늦게 끝나도 첫 쓰기를 다시 보내 응답을 받는다', async () => {
+  const board = makeBoard();
+  const t = new BleTransport({ pairingRetryMs: 1 });
+  await t.connect();
+  board.failWriteTimes = 2;
+  const r = await t.send(0x20);
+  assert.equal(r.status, SW.OK);
+  assert.equal(r.payload.length, 117, '다시 보낸 요청의 응답이 온전해야 한다');
+});
+
+test('실패로 알려진 쓰기가 늦게 도착하면 다시 보내지 않는다 — 응답이 밀리면 안 된다', async () => {
+  const board = makeBoard();
+  const t = new BleTransport({ pairingRetryMs: 50 });
+  await t.connect();
+  board.failWriteTimes = 1;
+  board.lateDelivery = true;
+
+  const r1 = await t.send(0x01);
+  assert.equal(r1.status, SW.OK);
+  assert.deepEqual(board.commands, [0x01],
+    '같은 명령이 두 번 처리되면 둘째 응답이 다음 요청의 응답으로 잡힌다');
+
+  // 다음 요청의 응답이 제 것이어야 한다 (117바이트짜리).
+  const r2 = await t.send(0x20);
+  assert.equal(r2.payload.length, 117);
+  assert.deepEqual(board.commands, [0x01, 0x20]);
+});
+
+test('링크가 끊겼으면 다시 시도하지 않는다', async () => {
+  const board = makeBoard();
+  const t = new BleTransport({ pairingRetryMs: 1, pairingRetries: 5 });
+  await t.connect();
+  board.failWrite = domError('NetworkError', 'GATT Server is disconnected');
+  board.device.gatt.disconnect();
+  const before = board.writes.length;
+  await assert.rejects(() => t.send(0x01));
+  assert.ok(board.writes.length - before <= 1, '끊긴 링크에 계속 쓰면 안 된다');
 });
 
 test('재연결해도 알림이 한 번만 배달된다', async () => {
@@ -156,7 +220,7 @@ test('재연결해도 알림이 한 번만 배달된다', async () => {
 
 test('알림 구독에 실패하면 링크를 닫고 상태를 남기지 않는다', async () => {
   const board = makeBoard();
-  const t = new BleTransport();
+  const t = new BleTransport({ pairingRetryMs: 1 });
   board.failNotify = domError('NetworkError', 'GATT Error Unknown');
 
   await assert.rejects(() => t.connect(), (e) => e instanceof WalletError);
@@ -170,7 +234,7 @@ test('알림 구독에 실패하면 링크를 닫고 상태를 남기지 않는�
 
 test('실패 후 다시 연결할 수 있다', async () => {
   const board = makeBoard();
-  const t = new BleTransport();
+  const t = new BleTransport({ pairingRetryMs: 1 });
   board.failNotify = domError('NetworkError', 'GATT Error Unknown');
   await assert.rejects(() => t.connect());
 
