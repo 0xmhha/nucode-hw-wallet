@@ -29,8 +29,9 @@ export function PinCard(p: { canChange: boolean; busy: boolean; onChange: () => 
         </button>
       </div>
       <p className={s.hint}>
-        PIN 을 잊었다면 보드에서 <strong>공장 초기화</strong>를 합니다 — 버튼 1과 4를 5초 동안
-        함께 누른 뒤, LED 카운트다운이 끝나면 손을 떼고 버튼 2 → 3 을 누릅니다.
+        PIN 을 잊었다면 보드에서 <strong>공장 초기화</strong>를 합니다 — 버튼 1과 4를 함께
+        누르고 있으면 켜진 LED 가 하나씩 꺼집니다. 다 꺼지면(5초) 손을 떼고, LED 4개가 빠르게
+        깜빡이는 동안 버튼 2 → 3 을 누릅니다.
         지갑과 페어링 정보가 지워지며, 복구 문구로만 되살릴 수 있습니다.
       </p>
     </section>

@@ -12,17 +12,16 @@
 
 ### 1. 다음 작업
 
-#### 🟠 T14. Zephyr 포트를 실기기에서 확인한다
-빌드까지는 끝났다 (2026-09-26, `feat/zephyr-port`). 보드 정의(`nucode_nu40`)는
-Zephyr `main` 에 이미 들어가 있어서 저장소 밖 트리를 가리킬 필요가 없었다.
-`firmware/wallet/west.yml` 이 검증한 커밋에 고정하고 `scripts/build-zephyr.sh` 로
-빌드한다. 빌드하면서 보드에서 틀렸을 것 다섯 가지를 고쳤다 (연결 해제를 BT
-스레드에서 처리하던 것, 연결 포인터 경합, 끊긴 뒤 재광고 안 함, LED 극성,
-공장 초기화용 HAL 누락).
+#### 🟢 T22. Zephyr 포트에서도 Solana 를 쓴다
+Zephyr 포트는 Ed25519 가 없어 Solana 요청에 `UNSUPPORTED_CHAIN` 으로 답한다.
+Arduino 포트는 CryptoCell 하드웨어로 하는데, 업스트림 Zephyr 에는 그 경로가 없다.
+이 저장소가 직접 구현한 것은 SLIP-0010 키 파생까지이고, 곡선 연산은 없다.
 
-남은 일은 실기기다. `zephyr.uf2` 를 올리고 `npm run test:device:interactive` 를
-통과시킨다. Solana 항목은 이 포트에서 건너뛴다 (Ed25519 없음). 올리면 SoftDevice
-자리를 덮어쓰므로 설치 문서의 되돌리기 절차도 이때 처음 확인하게 된다.
+`crypto/` 에 이식 가능한 Ed25519 를 넣으면 Zephyr 에서 Solana 가 되고, 호스트
+테스트의 가짜 구현(`firmware/test/host_ed25519.c`)을 지워 적합성 테스트가 진짜
+Solana 서명을 검증하게 된다. 단점도 있다. 상수 시간 곡선 연산은 직접 쓰기 어렵고
+틀리기 쉬우므로, secp256k1 에 micro-ecc 를 쓴 것처럼 검증된 작은 구현을 가져오는
+편이 맞다. 펌웨어가 수십 KB 커지고, 하드웨어보다 느리다.
 
 ### 2. 하지 않기로 했거나 고칠 수 없어 기록만 하는 것
 
@@ -67,6 +66,7 @@ LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승�
 | T18 | DApp 이 수수료를 먼저 정해 트랜잭션에 넣고 같은 상한으로 잔액을 확인한다 | 규칙은 SDK 의 `suggestFees` 하나를 provider 와 DApp 이 같이 쓴다 |
 | T19 | `commands.c` 를 공통·셋업·Ethereum·Solana 네 파일로 나눴다 | 펌웨어 148 + 140, 적합성 23개 통과. Arduino 스케치 빌드 통과 |
 | T21 | 실기기에서 PIN 설정(1차 입력과 재입력)부터 서명까지 끝까지 통과했다 | 2026-09-26, PR #2 머리 `dd4cd70` 빌드. `npm run test:device:interactive` 8개 통과. 서명 승인을 5.6초 기다리는 동안 SDK 의 3초 간격 `GET_RESULT` 가 겹쳤지만 서명은 골든 벡터와 같았다 |
+| T14 | Zephyr 포트가 NU-40 에서 돈다 | 2026-09-27, `feat/zephyr-port`. 업스트림 보드 정의를 `west.yml` 로 고정해 빌드했다. 실기기에서 `npm run test:device:interactive` 8개 중 7개 통과, Solana 1개 건너뜀. 본딩 없는 첫 연결과 Zephyr 의 공장 초기화(지갑과 본딩 삭제)도 확인했다. 실기기에서 잡은 버그 둘: 첫 연결의 페어링 동안 SDK 가 포기하던 것, macOS 가 스스로 다시 보낸 쓰기를 SDK 도 다시 보내 응답이 한 칸씩 밀리던 것 |
 | T13 | 펌웨어 바이너리를 저장소에서 빼고, 빈 머신에서 빌드하는 가이드와 `scripts/build-firmware.sh` 로 바꿨다 | 빈 arduino-cli 환경과 빈 Python 가상환경에서 새로 클론한 저장소를 빌드하고 보드에 올려 실기기 테스트를 통과했다. 그 과정에서 코어의 macOS 용 nrfutil 이 실행 권한 없이 풀려 빌드가 멈추는 것을 찾았다. 히스토리의 옛 elf·map 은 지우지 않았다 (`git filter-repo` 가 필요하고, 앞으로 더 커지지는 않는다) |
 | T16 | 두 세션이 같은 파일을 고치던 문제 | 지금은 커밋이 한 갈래다 |
 | — | 실기기에서만 나던 시계 스큐 언더플로와 연결 해제 시 세션이 안 닫히던 버그 | 회귀 테스트 `test_session_idle` 과 `nu_wallet_disconnected` |

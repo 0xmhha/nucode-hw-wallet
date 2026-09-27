@@ -232,8 +232,19 @@ ZEPHYR_WS=~/zephyr-nu scripts/build-zephyr.sh pristine   # 처음부터 다시
 올리는 법:
 
 1. OS 블루투스 설정에서 기존 `NuWallet-…` 을 지운다 (아래 "설치 후 확인" 참고).
-2. RESET 을 빠르게 두 번 누른다. `BARAM-NU40` 드라이브가 뜬다.
-3. `firmware/wallet/build/zephyr/zephyr.uf2` 를 그 드라이브에 복사한다.
+2. RESET 을 빠르게 두 번 누른다. 부트로더 드라이브가 뜬다. 이름은 부트로더
+   빌드마다 다르다 (시험한 보드는 `NRF52BOOT`, 업스트림 문서는 `BARAM-NU40`).
+3. **드라이브의 `CURRENT.UF2` 를 먼저 복사해 둔다.** 지금 플래시 내용 그대로
+   (SoftDevice 와 Arduino 앱)라서, 되돌릴 때 이 파일을 다시 복사하면 된다.
+4. `firmware/wallet/build/zephyr/zephyr.uf2` 를 그 드라이브에 복사한다.
+
+**보드와 호스트의 본딩을 같이 지운다.** 펌웨어를 새로 올려도 Zephyr 의 저장 영역은
+지워지지 않아 보드는 예전 본딩을 기억한다. 호스트 쪽만 지우면 보드가 "Encryption is
+insufficient" 로 답하고, 호스트는 다시 페어링하지 않아 연결이 쓸 수 없는 채로 남는다.
+보드 쪽은 공장 초기화로 지운다 (`docs/protocol.md` §8).
+
+첫 연결의 페어링은 4초쯤 걸린다. Zephyr 는 LESC 의 P-256 을 소프트웨어로 한다.
+그동안 첫 요청이 거절되는데, SDK 가 기다렸다가 결과를 받는다.
 
 Zephyr 앱은 USB 시리얼로 로그를 낸다. Arduino 와 달리 부팅 로그도 보인다.
 
@@ -241,8 +252,13 @@ Zephyr 앱은 USB 시리얼로 로그를 낸다. Arduino 와 달리 부팅 로�
 screen /dev/cu.usbmodem* 115200
 ```
 
-Arduino 로 돌아가려면 SoftDevice 와 부트로더를 함께 다시 올린 뒤 스케치를 올린다.
-패키지는 Arduino 코어 안에 있다. **이 절차는 아직 실기기에서 해 보지 않았다.**
+Arduino 로 돌아가려면 RESET 을 두 번 누르고, 3단계에서 백업한 `CURRENT.UF2` 를
+드라이브에 복사한다. SoftDevice 와 Arduino 앱이 함께 돌아온다. Arduino 의 지갑
+레코드(LittleFS, `0xED000`~)는 Zephyr 가 쓰지 않는 영역이라 남아 있다.
+**이 되돌리기는 아직 실기기에서 해 보지 않았다.**
+
+백업이 없으면 SoftDevice 와 부트로더를 함께 다시 올린 뒤 스케치를 올린다.
+패키지는 Arduino 코어 안에 있다. 이 절차도 실기기에서 해 보지 않았다.
 
 ```sh
 # RESET 두 번으로 부트로더에 넣은 뒤
@@ -259,8 +275,10 @@ scripts/build-firmware.sh /dev/cu.usbmodem1101
 - **부트로더 위치.** 업스트림 DTS 주석은 UF2 부트로더가 `0xE0000` 에 있다고 적지만,
   Arduino 코어가 싣고 오는 부트로더(`…bootloader-0.9.2_s140_6.1.1.hex`)는 `0xF4000`
   에 있다. 업스트림 배치는 앱과 저장 영역을 `0xE0000` 아래에 두므로 둘 다에서
-  안전하다. 보드에 실제로 어느 부트로더가 있는지는 `BARAM-NU40` 드라이브의
-  `INFO_UF2.TXT` 로 확인한다.
+  안전하다. 보드에 실제로 어느 부트로더가 있는지는 부트로더 드라이브의
+  `INFO_UF2.TXT` 로 확인한다. 시험한 보드에는 NU-40 전용이 아니라 Nordic
+  nRF52840 DK 용 Adafruit 부트로더 0.9.1 (`Board-ID: nRF52840-pca10056-v1`,
+  SoftDevice S140 6.1.1)이 올라가 있었다. 두 보드는 LED·버튼 핀이 같아 동작한다.
 
 ## 설치 후 확인
 
