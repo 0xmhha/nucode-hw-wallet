@@ -13,7 +13,7 @@ const wallet = new NuWallet();
 const provider = new NuWalletProvider(wallet, {
   chainId: 84532,
   rpcUrl: 'https://sepolia.base.org',
-  onStart: () => showMessage('보드 버튼을 1 → 2 → 3 → 4 순서로 누르세요'),
+  onStart: () => showMessage('보드에서 켜진 LED 옆의 버튼을 한 번 누르세요'),
 });
 
 announceNuWalletProvider(provider);
@@ -80,7 +80,7 @@ const { domainSeparator, messageHash, digest } = hashTypedData(typedData);
 
 | code | 언제 |
 |---|---|
-| `4001` | 사용자가 거부했거나, 버튼 순서를 틀렸거나, 승인 시간이 지났다 |
+| `4001` | 사용자가 거부했거나, 켜진 LED 가 아닌 버튼을 거듭 눌렀거나, 승인 시간이 지났다 |
 | `4100` | 기기가 잠겨 있거나 PIN 이 필요하거나 지갑이 아직 없다 |
 | `4200` | 펌웨어가 모르는 명령이거나 지원하지 않는 체인이다 |
 | `4901` | 서명 요청의 체인이 연결된 체인과 다르다 |
