@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "store.h"
 #include <string.h>
+#include <stdio.h>
 
 /* ── 공장 초기화 ─────────────────────────────────────────────────────────
  *
@@ -121,4 +122,20 @@ void nu_wallet_init(nu_wallet *w, const nu_hal *hal, const char *device_name) {
         w->pin_attempts = nu_store_tries(w->rec, w->rec_len);
     }
     memset(raw, 0, sizeof raw);
+}
+
+void nu_device_name(uint32_t id0, uint32_t id1, const char *prefix,
+                    char *out, size_t cap) {
+    static const char AB[] = "ABCDEFGHJKLMNPQRSTUVWXYZ";  /* I, O 제외 */
+    static const char NU[] = "23456789";                  /* 0, 1 제외 */
+    if (!cap) return;
+    uint32_t h = id0 ^ (uint32_t)(id1 * 2654435761u);
+    char sfx[7];
+    for (int i = 0; i < 6; i++) {
+        if (i % 2 == 0) { sfx[i] = AB[h % 24]; h /= 24; }
+        else            { sfx[i] = NU[h % 8];  h /= 8;  }
+        if (h == 0) h = id1 ^ (uint32_t)((uint32_t)i * 0x9E3779B9u);
+    }
+    sfx[6] = 0;
+    snprintf(out, cap, "%s%s", prefix, sfx);
 }

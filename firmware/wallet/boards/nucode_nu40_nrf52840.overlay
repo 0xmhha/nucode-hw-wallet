@@ -1,0 +1,12 @@
+/*
+ * NU-40 DK 의 LED 는 LOW 에서 켜진다.
+ *
+ * 업스트림 보드 정의(boards/nucode/nucode_nu40)는 GPIO_ACTIVE_HIGH 로 적고 있고
+ * Adafruit variant.h 도 LED_STATE_ON=1 이다. 그러나 실기기에서 Arduino 포트로
+ * 하나씩 켜 보니 LOW 에서 켜졌다 (firmware/nuwallet/config.h 의 NU_LED_INVERT).
+ * 같은 보드이므로 여기서도 극성을 뒤집는다. 업스트림이 고쳐지면 이 파일을 지운다.
+ */
+&led0 { gpios = <&gpio0 13 GPIO_ACTIVE_LOW>; };
+&led1 { gpios = <&gpio0 14 GPIO_ACTIVE_LOW>; };
+&led2 { gpios = <&gpio0 15 GPIO_ACTIVE_LOW>; };
+&led3 { gpios = <&gpio0 16 GPIO_ACTIVE_LOW>; };

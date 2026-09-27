@@ -13,6 +13,16 @@ export interface TransportOptions {
   mtu?: number;
   /** 요청 하나의 타임아웃 (ms). 챌린지는 별도 타임아웃을 쓴다. */
   timeoutMs?: number;
+  /**
+   * 첫 연결의 페어링을 기다리는 간격 (ms) 과 횟수. 알림 구독이나 첫 쓰기가
+   * 거절되면 링크가 살아 있는 동안 이만큼 쉬었다 다시 한다. 기본 1500ms × 4.
+   *
+   * 본딩이 없는 호스트는 암호화를 요구하는 특성에 처음 접근할 때 거절당하고,
+   * 그제야 OS 가 페어링을 시작한다. 보드가 P-256 을 소프트웨어로 하면(Zephyr
+   * 포트) 페어링이 끝나기까지 4초쯤 걸린다.
+   */
+  pairingRetryMs?: number;
+  pairingRetries?: number;
 }
 
 export interface BleTraceEntry {
@@ -51,10 +61,31 @@ export class BleTransport {
 
   readonly mtu: number;
   readonly timeoutMs: number;
+  readonly pairingRetryMs: number;
+  readonly pairingRetries: number;
 
   constructor(opts: TransportOptions = {}) {
     this.mtu = opts.mtu ?? 20;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.pairingRetryMs = opts.pairingRetryMs ?? 1500;
+    this.pairingRetries = opts.pairingRetries ?? 4;
+  }
+
+  /** 페어링이 끝나기를 기다리며 op 을 다시 한다. 링크가 끊기면 바로 던진다. */
+  private async withPairingGrace<T>(dev: BluetoothDevice, what: string,
+                                    op: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await op();
+      } catch (e) {
+        const linkUp = !!dev.gatt?.connected;
+        if (!linkUp || attempt >= this.pairingRetries) throw e;
+        this.trace('system', 'gatt',
+          `${what} 거절 — 페어링을 기다렸다 다시 시도 (${attempt + 1}/${this.pairingRetries})`,
+          messageOf(e, 'GATT 오류'));
+        await new Promise((r) => setTimeout(r, this.pairingRetryMs));
+      }
+    }
   }
 
   static get isSupported(): boolean {
@@ -102,7 +133,7 @@ export class BleTransport {
       const rx = await svc.getCharacteristic(RX_UUID);
       const tx = await svc.getCharacteristic(TX_UUID);
       // CCCD 쓰기는 암호화된 링크를 요구한다. 페어링이 여기서 일어난다.
-      await tx.startNotifications();
+      await this.withPairingGrace(dev, '알림 구독', () => tx.startNotifications());
 
       tx.addEventListener('characteristicvaluechanged', this.onValueChanged);
       dev.addEventListener('gattserverdisconnected', this.onGattDisconnected);
@@ -157,7 +188,8 @@ export class BleTransport {
    */
   async send(cmd: number, payload?: Uint8Array, timeoutMs?: number): Promise<Response> {
     const run = async (): Promise<Response> => {
-      if (!this.rx || !this.isConnected) {
+      const dev = this.device;
+      if (!this.rx || !dev || !this.isConnected) {
         throw new WalletError(SW.DEVICE_ERROR, '연결되어 있지 않습니다');
       }
       const msg = encodeRequest(cmd, payload);
@@ -168,10 +200,11 @@ export class BleTransport {
         this.pending = resolve;
         this.pendingReject = reject;
       });
-      const timer = setTimeout(() => {
-        this.pendingReject?.(new WalletError(SW.DEVICE_ERROR, '기기 응답 시간 초과'));
-        this.pending = this.pendingReject = null;
-      }, timeoutMs ?? this.timeoutMs);
+      let answered = false;
+      result.then(() => { answered = true; }, () => { answered = true; });
+      /* 타임아웃은 다 보낸 뒤부터 잰다. 첫 패킷이 페어링을 기다리며 다시 시도하는
+       * 동안 시계가 가면, 짧은 타임아웃을 준 호출자는 보내기도 전에 끝난다. */
+      let timer: ReturnType<typeof setTimeout> | undefined;
 
       try {
         for (let i = 0; i < packets.length; i++) {
@@ -188,15 +221,30 @@ export class BleTransport {
            * 사라지고 타임아웃만 난다 — 페어링 문제인지 알 길이 없다.
            * 첫 패킷을 응답 있는 쓰기로 보내면 오류가 즉시 올라온다.
            * 나머지는 속도를 위해 응답 없는 쓰기를 쓴다. */
-          if (i === 0 || !this.rx.writeValueWithoutResponse) await this.rx.writeValue(buf);
-          else await this.rx.writeValueWithoutResponse(buf);
+          const rx = this.rx;
+          /* 거절된 첫 쓰기를 곧바로 다시 보내지 않는다. macOS 는 거절을 알린 뒤
+           * 페어링이 끝나면 그 쓰기를 스스로 다시 보내서, 호스트에는 실패로 보인
+           * 요청이 보드에는 도착한다. 여기서도 다시 보내면 보드가 같은 명령을
+           * 두 번 처리하고, 응답에 요청 번호가 없으니 둘째 응답이 다음 요청의
+           * 것으로 잡혀 이후가 전부 한 칸씩 밀린다 (실기기에서 잡혔다).
+           * 그래서 기다리는 동안 응답이 오면 그것을 결과로 쓰고, 안 왔을 때만 다시 보낸다. */
+          if (i === 0) {
+            await this.withPairingGrace(dev, '첫 패킷 쓰기',
+              () => (answered ? Promise.resolve() : rx.writeValue(buf)));
+          }
+          else if (!rx.writeValueWithoutResponse) await rx.writeValue(buf);
+          else await rx.writeValueWithoutResponse(buf);
         }
+        timer = setTimeout(() => {
+          this.pendingReject?.(new WalletError(SW.DEVICE_ERROR, '기기 응답 시간 초과'));
+          this.pending = this.pendingReject = null;
+        }, timeoutMs ?? this.timeoutMs);
         return await result;
       } catch (e) {
         this.pending = this.pendingReject = null;
         throw writeError(e);
       } finally {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       }
     };
     // 직렬화: 앞의 요청이 끝나야 다음이 나간다.

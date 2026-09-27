@@ -12,20 +12,16 @@
 
 ### 1. 다음 작업
 
-#### 🟠 T14. Zephyr 앱을 살린다 (다음 작업)
-2026-09-26 에 살리기로 정했다. 이 PR 다음 작업으로 한다.
+#### 🟢 T22. Zephyr 포트에서도 Solana 를 쓴다
+Zephyr 포트는 Ed25519 가 없어 Solana 요청에 `UNSUPPORTED_CHAIN` 으로 답한다.
+Arduino 포트는 CryptoCell 하드웨어로 하는데, 업스트림 Zephyr 에는 그 경로가 없다.
+이 저장소가 직접 구현한 것은 SLIP-0010 키 파생까지이고, 곡선 연산은 없다.
 
-보드에 지금 올라가는 것은 Arduino 스케치이고, `firmware/wallet` 의 Zephyr 앱은
-보드 정의가 없어 빌드되지 않았다. 보드 정의는 이 저장소 밖에 있다. 로컬 Zephyr
-트리의 `boards/nucode/nucode_nu40/` 에 `nucode_nu40_nrf52840.dts`, 공통 `dtsi`,
-pinctrl, defconfig 가 있고, Adafruit 부트로더 없이 쓰는 `_bare` 변형도 있다.
-
-할 일은 이렇다. 먼저 그 보드 정의로 `firmware/wallet` 이 빌드되게 하고,
-보드 정의를 어떻게 가져올지 정한다 (업스트림 Zephyr 에 들어가 있는지, 아니면
-이 저장소에 `boards/` 로 두고 `BOARD_ROOT` 로 가리킬지). 그다음 실기기에서
-Arduino 와 같은 실기기 테스트(`npm run test:device:interactive`)를 통과시킨다.
-Zephyr 포트 고유의 수정(BT RX 스레드 스택을 넘치게 하던 문제)은 이때 처음
-실기기에서 확인하게 된다.
+`crypto/` 에 이식 가능한 Ed25519 를 넣으면 Zephyr 에서 Solana 가 되고, 호스트
+테스트의 가짜 구현(`firmware/test/host_ed25519.c`)을 지워 적합성 테스트가 진짜
+Solana 서명을 검증하게 된다. 단점도 있다. 상수 시간 곡선 연산은 직접 쓰기 어렵고
+틀리기 쉬우므로, secp256k1 에 micro-ecc 를 쓴 것처럼 검증된 작은 구현을 가져오는
+편이 맞다. 펌웨어가 수십 KB 커지고, 하드웨어보다 느리다.
 
 ### 2. 하지 않기로 했거나 고칠 수 없어 기록만 하는 것
 
@@ -70,6 +66,7 @@ LED 4개로는 "0.5 ETH 를 0xAbC… 로" 를 보여줄 수 없다. 버튼 승�
 | T18 | DApp 이 수수료를 먼저 정해 트랜잭션에 넣고 같은 상한으로 잔액을 확인한다 | 규칙은 SDK 의 `suggestFees` 하나를 provider 와 DApp 이 같이 쓴다 |
 | T19 | `commands.c` 를 공통·셋업·Ethereum·Solana 네 파일로 나눴다 | 펌웨어 148 + 140, 적합성 23개 통과. Arduino 스케치 빌드 통과 |
 | T21 | 실기기에서 PIN 설정(1차 입력과 재입력)부터 서명까지 끝까지 통과했다 | 2026-09-26, PR #2 머리 `dd4cd70` 빌드. `npm run test:device:interactive` 8개 통과. 서명 승인을 5.6초 기다리는 동안 SDK 의 3초 간격 `GET_RESULT` 가 겹쳤지만 서명은 골든 벡터와 같았다 |
+| T14 | Zephyr 포트가 NU-40 에서 돈다 | 2026-09-27, `feat/zephyr-port`. 업스트림 보드 정의를 `west.yml` 로 고정해 빌드했다. 실기기에서 `npm run test:device:interactive` 8개 중 7개 통과, Solana 1개 건너뜀. 본딩 없는 첫 연결과 Zephyr 의 공장 초기화(지갑과 본딩 삭제)도 확인했다. 실기기에서 잡은 버그 둘: 첫 연결의 페어링 동안 SDK 가 포기하던 것, macOS 가 스스로 다시 보낸 쓰기를 SDK 도 다시 보내 응답이 한 칸씩 밀리던 것 |
 | T13 | 펌웨어 바이너리를 저장소에서 빼고, 빈 머신에서 빌드하는 가이드와 `scripts/build-firmware.sh` 로 바꿨다 | 빈 arduino-cli 환경과 빈 Python 가상환경에서 새로 클론한 저장소를 빌드하고 보드에 올려 실기기 테스트를 통과했다. 그 과정에서 코어의 macOS 용 nrfutil 이 실행 권한 없이 풀려 빌드가 멈추는 것을 찾았다. 히스토리의 옛 elf·map 은 지우지 않았다 (`git filter-repo` 가 필요하고, 앞으로 더 커지지는 않는다) |
 | T16 | 두 세션이 같은 파일을 고치던 문제 | 지금은 커밋이 한 갈래다 |
 | — | 실기기에서만 나던 시계 스큐 언더플로와 연결 해제 시 세션이 안 닫히던 버그 | 회귀 테스트 `test_session_idle` 과 `nu_wallet_disconnected` |
